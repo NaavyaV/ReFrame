@@ -235,6 +235,12 @@ def _validate_ops(raw_ops: list, snapshot: Snapshot) -> tuple[list, int]:
             dropped += 1
             continue
         if isinstance(op, RenderOp):
+            if op.isolate:
+                # Isolation already hides the rest of the page; only the site header stays visible.
+                header = (snapshot.theme.get("header") or {}).get("ref") if snapshot.theme else None
+                op.keep_refs = [header] if header in by_ref else []
+                op.anchor_ref = None
+                op.position = "prepend"
             checked = _check_render(op, by_ref, snapshot)
             if checked is None:
                 log.warning("dropped render: %s", op.html[:300])
@@ -251,12 +257,15 @@ def _validate_ops(raw_ops: list, snapshot: Snapshot) -> tuple[list, int]:
                 dropped += 1
                 continue
         valid.append(op)
+    if any(isinstance(o, RenderOp) and o.isolate for o in valid):
+        valid = [o for o in valid if o.op not in ("hide", "highlight", "scroll_to")]
     return valid, dropped
 
 
 FALLBACK_MODEL = "openai/gpt-oss-120b"
 RATE_LIMIT_MODEL = "openai/gpt-oss-20b"
 _client: AsyncGroq | None = None
+_missing_models: set[str] = set()
 
 
 def _groq() -> AsyncGroq:
@@ -324,6 +333,8 @@ async def reframe(req: ReframeRequest) -> ReframeResponse:
 
     s = get_settings()
     model = s.groq_fast_model if req.continuation else s.groq_model
+    if model in _missing_models:
+        model = FALLBACK_MODEL
     messages = _build_messages(req)
     started = time.perf_counter()
 
@@ -344,6 +355,7 @@ async def reframe(req: ReframeRequest) -> ReframeResponse:
             if model == FALLBACK_MODEL:
                 raise
             log.warning("Groq model %s not found, using %s", model, FALLBACK_MODEL)
+            _missing_models.add(model)
             model = FALLBACK_MODEL
             completion = await _complete(model, messages)
         usage = completion.usage
@@ -368,6 +380,8 @@ async def reframe(req: ReframeRequest) -> ReframeResponse:
     ops, dropped = _validate_ops(data.get("operations", []), req.snapshot)
     reply = str(data.get("reply") or "").strip()[:600] or ("Done." if ops else "I couldn't change this page.")
     log.info("reframe model=%s ms=%d ops=%d dropped=%d", model, model_ms, len(ops), dropped)
+    log.info("reframe url=%s msg=%r reply=%r ops=%s", req.snapshot.url[:80], req.message[:80], reply[:120],
+             [o.model_dump(exclude_none=True) | ({"html": o.html[:160]} if isinstance(o, RenderOp) else {}) for o in ops])
     return ReframeResponse(
         reply=reply, operations=ops, dropped=dropped, model_ms=model_ms, done=bool(data.get("done"))
     )
