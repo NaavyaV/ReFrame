@@ -2,7 +2,9 @@ import { ApiError, apiFetch, clearAuth, getAuth, setAuth } from './shared/api.js
 
 const CONTENT_FILES = ['content/snapshot.js', 'content/apply.js', 'content/widget.js', 'content/main.js'];
 const MAX_CHAT = 60;
-const MAX_CACHE = 60;
+const MAX_CACHE = 40;
+const MAX_AUTO_REBUILDS = 6;
+const ACTION_WINDOW_MS = 15000;
 
 // ---------- per-tab session state ----------
 
@@ -10,7 +12,7 @@ const keys = (tabId) => ({ chat: `chat:${tabId}`, goal: `goal:${tabId}`, busy: `
 const busyTabs = new Set();
 const pendingRebuild = new Set();
 const debounceTimers = new Map();
-const renderCache = new Map();
+const lastAction = new Map();
 
 async function getSession(key) {
   return (await chrome.storage.session.get(key))[key];
@@ -83,10 +85,25 @@ function signature(snapshot) {
   return h.toString(36);
 }
 
-function cachePut(key, value) {
-  renderCache.delete(key);
-  renderCache.set(key, value);
-  if (renderCache.size > MAX_CACHE) renderCache.delete(renderCache.keys().next().value);
+// Session storage survives the service worker being stopped when idle.
+async function cacheGet(key) {
+  const cache = (await getSession('renderCache')) || {};
+  return cache[key]?.res || null;
+}
+
+async function cachePut(key, res) {
+  const cache = (await getSession('renderCache')) || {};
+  cache[key] = { res, ts: Date.now() };
+  const entries = Object.entries(cache).sort((a, b) => b[1].ts - a[1].ts).slice(0, MAX_CACHE);
+  await chrome.storage.session.set({ renderCache: Object.fromEntries(entries) });
+}
+
+function siteOf(url) {
+  try {
+    return new URL(url).hostname.split('.').slice(-2).join('.');
+  } catch {
+    return '';
+  }
 }
 
 function mergePageStyle(base, ops) {
@@ -102,18 +119,23 @@ function mergePageStyle(base, ops) {
   return merged;
 }
 
-async function updateGoal(tabId, text, ops, continuation) {
+async function updateGoal(tabId, text, res, continuation, pageUrl) {
   const key = keys(tabId).goal;
+  const ops = res.operations || [];
   if (ops.some((op) => op.op === 'restore')) {
     await chrome.storage.session.remove(key);
     return;
   }
-  if (!ops.length) return;
   const goal = (await getSession(key)) || {};
+  if (!ops.length && !res.done) return;
   const structural = ops.some((op) => op.op !== 'page_style');
+  let message = structural && !continuation ? text : goal.message || null;
+  if (res.done) message = null;
   await chrome.storage.session.set({
     [key]: {
-      message: structural && !continuation ? text : goal.message || null,
+      message,
+      site: !continuation && structural ? siteOf(pageUrl) : goal.site || siteOf(pageUrl),
+      autoRebuilds: continuation ? (goal.autoRebuilds || 0) + 1 : 0,
       pageStyle: mergePageStyle(goal.pageStyle, ops),
     },
   });
@@ -128,18 +150,18 @@ async function runReframe(tabId, text, { continuation = false } = {}) {
 
   const { snapshot, applied } = await snapshotTab(tabId);
   const cacheKey = `${text}|${signature(snapshot)}`;
-  let res = continuation ? renderCache.get(cacheKey) : null;
+  let res = continuation ? await cacheGet(cacheKey) : null;
   if (!res) {
     res = await apiFetch('/reframe', {
       method: 'POST',
       token: auth.token,
-      body: { message: text, snapshot, history, applied, continuation },
+      body: { message: text, snapshot, history: continuation ? [] : history, applied, continuation },
     });
-    if (res.operations?.length) cachePut(cacheKey, res);
+    if (res.operations?.length) await cachePut(cacheKey, res);
   }
   const ops = res.operations || [];
   await chrome.tabs.sendMessage(tabId, { type: 'rf:apply', ops });
-  await updateGoal(tabId, text, ops, continuation);
+  await updateGoal(tabId, text, res, continuation, snapshot.url);
   await pushChat(tabId, { role: 'assistant', content: res.reply });
   return { ok: true };
 }
@@ -167,9 +189,21 @@ async function handleChat(tabId, text) {
 
 // ---------- following the user across pages ----------
 
+async function shouldContinue(tabId, goal) {
+  if (!goal?.message) return false;
+  if ((goal.autoRebuilds || 0) >= MAX_AUTO_REBUILDS) return false;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  const sameSite = tab && siteOf(tab.url) === goal.site;
+  const fromOurButton = Date.now() - (lastAction.get(tabId) || 0) < ACTION_WINDOW_MS;
+  return sameSite || fromOurButton;
+}
+
 async function continueGoal(tabId) {
   const goal = await getSession(keys(tabId).goal);
-  if (!goal?.message) return;
+  if (!(await shouldContinue(tabId, goal))) {
+    chrome.tabs.sendMessage(tabId, { type: 'rf:pending', on: false }).catch(() => {});
+    return;
+  }
   if (busyTabs.has(tabId)) {
     pendingRebuild.add(tabId);
     return;
@@ -192,7 +226,7 @@ function schedulePageChange(tabId, delay = 150) {
 async function onHello(tabId) {
   const goal = await getSession(keys(tabId).goal);
   const auth = await getAuth();
-  const pending = Boolean(goal?.message && auth?.token);
+  const pending = Boolean(auth?.token) && (await shouldContinue(tabId, goal));
   if (pending) schedulePageChange(tabId, 0);
   return { state: await tabState(tabId), pageStyle: goal?.pageStyle || null, pending };
 }
@@ -234,6 +268,7 @@ chrome.commands.onCommand.addListener(async (command) => {
 chrome.tabs.onCreated.addListener(async (tab) => {
   if (tab.openerTabId === undefined) return;
   const goal = await getSession(keys(tab.openerTabId).goal);
+  if (lastAction.has(tab.openerTabId)) lastAction.set(tab.id, lastAction.get(tab.openerTabId));
   if (goal) await chrome.storage.session.set({ [keys(tab.id).goal]: goal });
 });
 
@@ -270,6 +305,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     case 'rf:page-changed':
       schedulePageChange(tabId);
+      return false;
+    case 'rf:acted':
+      lastAction.set(tabId, Date.now());
       return false;
     case 'rf:restored':
       chrome.storage.session.remove(keys(tabId).goal).then(() => sendResponse({ ok: true }));

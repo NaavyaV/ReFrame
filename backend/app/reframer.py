@@ -9,6 +9,7 @@ from groq import AsyncGroq, BadRequestError, NotFoundError, RateLimitError
 from pydantic import TypeAdapter, ValidationError
 
 from .config import get_settings
+from .quick import quick_reframe
 from .schemas import (
     Operation,
     ReframeRequest,
@@ -32,53 +33,31 @@ CONSEQUENTIAL_LINK = re.compile(
 )
 _TAG_WITH_REF = re.compile(r"<[a-zA-Z][^<>]*?\bdata-rf-(target|bind)\s*=\s*[\"'](r\d{1,5})[\"'][^<>]*>")
 
-SYSTEM_PROMPT = """You are ReFrame, a front-end accessibility layer inside a Chrome extension. \
-You only change how the CURRENT page looks and is laid out, for older adults and people with low \
-digital literacy. Back-end behaviour, accounts and data are not your concern.
+SYSTEM_PROMPT = """You are ReFrame, a front-end accessibility layer for older adults. You only change how the \
+CURRENT page looks. Reply with ONE JSON object:
+{"reply":"<one short plain sentence naming the next button>","done":false,"operations":[...]}
+"done": true only when this page shows the goal is finished (e.g. a confirmation) and no more help is needed.
 
-Return ONE JSON object: {"reply": "<one short plain sentence>", "operations": [ ... ]}
+OPS
+render {"op":"render","html":"...","css":"...","isolate":true,"keep_refs":["rN"]}
+  HTML is placed in the page under the site header, in a centered 880px column; the rest is hidden (popups too).
+  keep_refs = the header ref from THEME.header.ref. Build ONE full-width panel: heading, optional short info copied from the page, then full-width stacked buttons
+  (>=60px tall, 20-24px text, left-aligned), primary first. Match the site: put the real class names from
+  .cls / THEME.card.cls / THEME.button.cls / THEME.heading.cls on your elements, use THEME colours/fonts; no new visual style. Keep css short (auto-scoped).
+  <button data-rf-target="rN">label</button> clicks real element rN; <input|select data-rf-bind="rN"> mirrors
+  real field rN. data-rf-primary="1" on the single next step; data-rf-confirm="1" on pay/submit/delete/buy/send.
+  Labels say what the button really does; a link leading toward the goal is "Go to <place>".
+  No script/form/iframe/href/url()/event handlers. Never invent amounts, dates or names; use "context".
+  isolate=false + "anchor_ref" + "position"(before|after|prepend|append): small addition, nothing hidden.
+hide|unhide|highlight {"op":"hide","refs":["rN"]}
+relabel {"op":"relabel","ref":"rN","text":"plain words"}
+style {"op":"style","ref":"rN","styles":{"font-size":"22px"}}
+page_style {"op":"page_style","font_scale":1-2.5,"line_height":1-2.5,"high_contrast":b,"dark_mode":b,"hide_images":b,"reduce_motion":b,"readable_font":b,"underline_links":b}
+scroll_to {"op":"scroll_to","ref":"rN"}   restore {"op":"restore"}
 
-OPERATIONS
-1. {"op":"render","html":"...","css":"...","isolate":true,"keep_refs":["rN"]}
-   Inserts your HTML into the page itself, so it inherits the site's CSS.
-   - Layout: with isolate=true your HTML sits in a centered full-width column (max 880px) directly under the
-     site's header, on the site's page background; the rest of the page is hidden. Build ONE panel that fills
-     that column (width:100%): a heading, optional short info lines copied from the page, then full-width
-     stacked buttons with the primary one first.
-   - Make it look like it belongs to the site: reuse the site's own class names (shown as .cls in PAGE, and
-     THEME.card / THEME.button / THEME.heading) and the THEME fonts/colours. Never introduce a new visual style.
-   - Bigger and calmer than the original: buttons width:100%, at least 60px tall, text 20-24px, generous
-     spacing, left-aligned text; the primary action styled like the site's main button, others as outlined
-     versions in the same colours.
-   - Clickable things: <button data-rf-target="rN">label</button> clicks the real element rN.
-     Form fields: <input data-rf-bind="rN"> / <select data-rf-bind="rN"></select> mirror the real field rN
-     (select options are copied automatically).
-     Add data-rf-confirm="1" on anything that pays, submits, deletes, buys, sends or signs out.
-     Put data-rf-primary="1" on the single most likely next step.
-   - Button labels say what the button really does. A link that only leads toward the goal is labelled by
-     where it goes ("Go to Account Center"), never as the goal itself ("Download bill") unless it does that.
-   - No <script>, <form>, <iframe>, event handlers, href or url(). Text must come from the page; never invent
-     amounts, dates or names. Use "context" to label similar controls (e.g. "October 2026 bill - $84.12").
-   - css: plain rules for elements inside your HTML (it is scoped automatically). Keep it short.
-   - keep_refs: page parts to keep visible, normally just the site header block (THEME.header.ref).
-   - isolate=false + "anchor_ref"/"position" (before|after|prepend|append) instead adds your HTML next to an
-     existing element without hiding anything; use that only for small additions.
-2. {"op":"hide","refs":["rN",...]} / {"op":"unhide","refs":[...]} / {"op":"highlight","refs":[...]}
-3. {"op":"relabel","ref":"rN","text":"plain words"}
-4. {"op":"style","ref":"rN","styles":{"font-size":"22px"}}  (no url())
-5. {"op":"page_style","font_scale":1.0-2.5,"line_height":1.0-2.5,"high_contrast":bool,"dark_mode":bool,
-    "hide_images":bool,"reduce_motion":bool,"readable_font":bool,"underline_links":bool}
-6. {"op":"scroll_to","ref":"rN"}
-7. {"op":"restore"}  undo everything
-
-WHEN TO USE WHAT
-- Task goals ("pay my bill", "find statements") -> one "render" with the few controls that lead to the goal.
-  If the goal is on another page, show the link that most likely leads there as the primary button.
-  A render with isolate=true already hides popups, so don't add buttons to close them. Only when you are
-  not rendering and a popup blocks the page, hide it (or offer its close button).
-- Small visual wishes ("bigger text", "hide ads", "too bright") -> page_style / style / hide / relabel, no render.
-- Use ONLY refs from PAGE. Never put values of SENSITIVE fields anywhere.
-- "reply": short, kind, no jargon; name the button to press next.
+RULES
+Task goals -> one render with the few controls toward the goal (if it is on another page, the best link is primary).
+Small visual wishes -> page_style/style/hide/relabel, no render. Only refs from PAGE. Never output SENSITIVE values.
 """
 
 
@@ -110,8 +89,8 @@ def _describe(el: SnapElement) -> str:
     return " | ".join(parts)
 
 
-MAX_CONTROLS_IN_PROMPT = 70
-MAX_BLOCKS_IN_PROMPT = 14
+MAX_CONTROLS_IN_PROMPT = 45
+MAX_BLOCKS_IN_PROMPT = 8
 _STOPWORDS = {
     "the", "and", "for", "you", "your", "want", "need", "help", "please", "can", "how", "what", "with",
     "this", "that", "page", "make", "show", "find", "get", "into", "from", "have", "are", "was",
@@ -169,8 +148,12 @@ def _format_snapshot(s: Snapshot, message: str) -> str:
 
 def _build_messages(req: ReframeRequest) -> list[dict]:
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for turn in req.history[-6:]:
-        messages.append({"role": turn.role, "content": turn.content})
+    if not req.continuation:
+        # Only the user's own recent requests; assistant replies add tokens without helping.
+        recent = [t for t in req.history if t.role == "user"][-3:]
+        if recent:
+            messages.append({"role": "user", "content": "Earlier requests: " + " | ".join(t.content[:200] for t in recent)})
+            messages.append({"role": "assistant", "content": "Noted."})
     applied = ", ".join(req.applied) if req.applied else "nothing"
     intro = (
         "The user just moved to this page while working on the request below. Rebuild this page for it."
@@ -243,14 +226,18 @@ def _validate_ops(raw_ops: list, snapshot: Snapshot) -> tuple[list, int]:
     by_ref = {e.ref: e for e in snapshot.elements}
     valid, dropped = [], 0
     for raw in raw_ops if isinstance(raw_ops, list) else []:
+        if isinstance(raw, dict) and isinstance(raw.get("keep_refs"), list):
+            raw["keep_refs"] = [r for r in raw["keep_refs"] if isinstance(r, str) and r in by_ref]
         try:
             op = _op_adapter.validate_python(raw)
-        except ValidationError:
+        except ValidationError as err:
+            log.warning("dropped op %s: %s", str(raw)[:300], str(err).splitlines()[:4])
             dropped += 1
             continue
         if isinstance(op, RenderOp):
             checked = _check_render(op, by_ref, snapshot)
             if checked is None:
+                log.warning("dropped render: %s", op.html[:300])
                 dropped += 1
             else:
                 valid.append(checked)
@@ -286,7 +273,7 @@ async def _complete_once(model: str, messages: list[dict]):
         response_format={"type": "json_object"},
         temperature=0.2,
         # Groq reserves max tokens against the per-minute token budget, so keep this near real output size.
-        max_completion_tokens=1400,
+        max_completion_tokens=1000,
         **({"reasoning_effort": "low"} if "gpt-oss" in model else {}),
     )
 
@@ -316,6 +303,12 @@ async def _complete(model: str, messages: list[dict]):
 
 
 async def reframe(req: ReframeRequest) -> ReframeResponse:
+    if not req.continuation:
+        quick = quick_reframe(req.message, req.applied)
+        if quick is not None:
+            log.info("reframe handled locally: %s", [o.op for o in quick.operations])
+            return quick
+
     s = get_settings()
     model = s.groq_fast_model if req.continuation else s.groq_model
     messages = _build_messages(req)
@@ -350,8 +343,6 @@ async def reframe(req: ReframeRequest) -> ReframeResponse:
             break
         except json.JSONDecodeError:
             log.warning("Groq returned invalid JSON (attempt %d)", attempt + 1)
-            messages.append({"role": "assistant", "content": content})
-            messages.append({"role": "user", "content": "That was not valid JSON. Return only the JSON object."})
 
     model_ms = int((time.perf_counter() - started) * 1000)
     if not isinstance(data, dict):
@@ -360,4 +351,6 @@ async def reframe(req: ReframeRequest) -> ReframeResponse:
     ops, dropped = _validate_ops(data.get("operations", []), req.snapshot)
     reply = str(data.get("reply") or "").strip()[:600] or ("Done." if ops else "I couldn't change this page.")
     log.info("reframe model=%s ms=%d ops=%d dropped=%d", model, model_ms, len(ops), dropped)
-    return ReframeResponse(reply=reply, operations=ops, dropped=dropped, model_ms=model_ms)
+    return ReframeResponse(
+        reply=reply, operations=ops, dropped=dropped, model_ms=model_ms, done=bool(data.get("done"))
+    )

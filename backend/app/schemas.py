@@ -136,4 +136,5 @@ class ReframeResponse(BaseModel):
     reply: str
     operations: list[Operation]
     dropped: int = 0
+    done: bool = False
     model_ms: int | None = None

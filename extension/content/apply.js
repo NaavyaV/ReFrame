@@ -212,6 +212,7 @@
       const label = (node.innerText || node.textContent || '').trim().slice(0, 80) || 'Continue?';
       if (!(await RF.ui.confirm(label))) return;
     }
+    RF.notify?.('rf:acted');
     pressElement(target);
     RF.afterAction?.();
   }
