@@ -78,3 +78,11 @@ export const updatePrefs = spacetimedb.reducer(
     ctx.db.appUser.userId.update({ ...row, prefsJson });
   }
 );
+
+export const deleteUser = spacetimedb.reducer(
+  { userId: t.string() },
+  (ctx, { userId }) => {
+    requireAdmin(ctx);
+    if (!ctx.db.appUser.userId.delete(userId)) throw new SenderError('not_found');
+  }
+);
