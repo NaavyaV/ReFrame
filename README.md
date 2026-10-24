@@ -45,6 +45,7 @@ Fill in at least:
 | --- | --- |
 | `GROQ_API_KEY` | Your Groq key |
 | `GROQ_MODEL` | `openai/gpt-oss-120b` |
+| `GROQ_FAST_MODEL` | `openai/gpt-oss-20b` (automatic rebuilds and overflow) |
 | `SPACETIME_HOST` | `https://maincloud.spacetimedb.com` |
 | `SPACETIME_DB_NAME` | Your database name |
 | `SPACETIME_TOKEN` | Output of `spacetime login show --token` |
@@ -108,6 +109,20 @@ The extension talks to `http://localhost:8000` by default, so keep the backend r
 
 - Extension code: click the reload icon on ReFrame in `chrome://extensions`, then refresh open tabs.
 - Backend code: reloads automatically with `--reload`.
+
+## Rate limits
+
+| Limit | Default | Setting |
+| --- | --- | --- |
+| Groq requests per minute, per model | 30 | `GROQ_RPM` |
+| Groq tokens per minute, per model | 8,000 | `GROQ_TPM` |
+| Groq requests per day, per model | 1,000 | `GROQ_RPD` |
+| Groq tokens per day, per model | 200,000 | `GROQ_TPD` |
+| Max wait for Groq budget before a 429 | 8 s | `GROQ_MAX_WAIT_SECONDS` |
+| AI requests per user | 6/min, 60/hour, one at a time | `USER_REFRAME_PER_MINUTE`, `USER_REFRAME_PER_HOUR` |
+| Login/register per IP | 10/min | `AUTH_PER_MINUTE` |
+
+The Groq values match the free tier for `openai/gpt-oss-120b` and `openai/gpt-oss-20b`. Each model has its own budget; when `GROQ_MODEL` runs out, requests go to `GROQ_FAST_MODEL`. Local quick commands and cached pages don't count.
 
 ## Tests
 

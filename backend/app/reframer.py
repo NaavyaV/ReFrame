@@ -264,7 +264,7 @@ def _validate_ops(raw_ops: list, snapshot: Snapshot) -> tuple[list, int]:
 # Groq reserves max tokens against the per-minute token budget, so keep this near real output size.
 MAX_COMPLETION_TOKENS = 1500
 _client: AsyncGroq | None = None
-_budget: GroqBudget | None = None
+_budgets: dict[str, GroqBudget] = {}
 
 
 def _groq() -> AsyncGroq:
@@ -274,12 +274,12 @@ def _groq() -> AsyncGroq:
     return _client
 
 
-def _groq_budget() -> GroqBudget:
-    global _budget
-    if _budget is None:
+def _groq_budget(model: str) -> GroqBudget:
+    # Groq limits each model separately.
+    if model not in _budgets:
         s = get_settings()
-        _budget = GroqBudget(s.groq_rpm, s.groq_tpm, s.groq_rpd, s.groq_tpd, s.groq_max_wait)
-    return _budget
+        _budgets[model] = GroqBudget(s.groq_rpm, s.groq_tpm, s.groq_rpd, s.groq_tpd, s.groq_max_wait)
+    return _budgets[model]
 
 
 def _estimate_tokens(messages: list[dict]) -> int:
@@ -294,10 +294,34 @@ def _retry_after(err: RateLimitError) -> float:
         return 10.0
 
 
+def _pick_model(models: list[str], tokens: int) -> str:
+    """First model with budget now, otherwise the one that frees up soonest."""
+    waits = [(_groq_budget(m).wait_for(tokens), i, m) for i, m in enumerate(models)]
+    ready = [m for w, _, m in waits if w == 0]
+    return ready[0] if ready else min(waits)[2]
+
+
 async def _complete(model: str, messages: list[dict]):
-    """One Groq call, throttled by the shared budget. A 429 pauses all calls; it is never retried here."""
-    budget = _groq_budget()
-    entry = await budget.acquire(_estimate_tokens(messages))
+    """One Groq call, throttled per model; overflows to GROQ_FAST_MODEL when the main model is out of budget."""
+    tokens = _estimate_tokens(messages)
+    models = list(dict.fromkeys([model, get_settings().groq_fast_model]))
+    chosen = _pick_model(models, tokens)
+    if chosen != model:
+        log.info("Groq budget low on %s; using %s", model, chosen)
+    try:
+        return await _complete_on(chosen, messages, tokens)
+    except RateLimited:
+        others = [m for m in models if m != chosen and _groq_budget(m).wait_for(tokens) == 0]
+        if not others:
+            raise
+        log.info("Groq limit on %s; using %s", chosen, others[0])
+        return await _complete_on(others[0], messages, tokens)
+
+
+async def _complete_on(model: str, messages: list[dict], tokens: int):
+    """A 429 pauses calls to this model; it is never retried on the same model."""
+    budget = _groq_budget(model)
+    entry = await budget.acquire(tokens)
     try:
         completion = await _groq().chat.completions.create(
             model=model,

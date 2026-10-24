@@ -95,6 +95,16 @@ class GroqBudget:
                     raise RateLimited(60, "That request is too large for the AI service right now.")
         return wait
 
+    def wait_for(self, tokens: int) -> float:
+        """Seconds until a call of this size fits; infinite if it never will."""
+        now = time.monotonic()
+        if now < self._cooldown_until:
+            return self._cooldown_until - now
+        try:
+            return self._wait_needed(now, tokens)
+        except RateLimited:
+            return math.inf
+
     async def acquire(self, tokens: int) -> list:
         async with self._lock:
             now = time.monotonic()
