@@ -1,9 +1,10 @@
 export const DEFAULT_API = 'http://localhost:8000';
 
 export class ApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, retryAfter = 0) {
     super(message);
     this.status = status;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -49,7 +50,8 @@ export async function apiFetch(path, { method = 'GET', body, token } = {}) {
     let message = 'Something went wrong.';
     if (typeof data.detail === 'string') message = data.detail;
     else if (resp.status === 422) message = 'Check your details and try again.';
-    throw new ApiError(message, resp.status);
+    const retryAfter = Number(resp.headers.get('Retry-After') || data.retry_after) || (resp.status === 429 ? 10 : 0);
+    throw new ApiError(message, resp.status, retryAfter);
   }
   return data;
 }

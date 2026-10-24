@@ -13,6 +13,12 @@ const busyTabs = new Set();
 const pendingRebuild = new Set();
 const debounceTimers = new Map();
 const lastAction = new Map();
+// Set when the server answers 429; no automatic rebuilds or chats are sent before this time.
+let cooldownUntil = 0;
+
+function cooldownLeft() {
+  return Math.max(0, Math.ceil((cooldownUntil - Date.now()) / 1000));
+}
 
 async function getSession(key) {
   return (await chrome.storage.session.get(key))[key];
@@ -135,10 +141,16 @@ async function updateGoal(tabId, text, res, continuation, pageUrl) {
     [key]: {
       message,
       site: !continuation && structural ? siteOf(pageUrl) : goal.site || siteOf(pageUrl),
-      autoRebuilds: continuation ? (goal.autoRebuilds || 0) + 1 : 0,
+      autoRebuilds: continuation ? goal.autoRebuilds || 0 : 0,
       pageStyle: mergePageStyle(goal.pageStyle, ops),
     },
   });
+}
+
+async function countAutoRebuild(tabId) {
+  const key = keys(tabId).goal;
+  const goal = await getSession(key);
+  if (goal) await chrome.storage.session.set({ [key]: { ...goal, autoRebuilds: (goal.autoRebuilds || 0) + 1 } });
 }
 
 async function runReframe(tabId, text, { continuation = false } = {}) {
@@ -152,6 +164,7 @@ async function runReframe(tabId, text, { continuation = false } = {}) {
   const cacheKey = `${text}|${signature(snapshot)}`;
   let res = continuation ? await cacheGet(cacheKey) : null;
   if (!res) {
+    if (continuation) await countAutoRebuild(tabId);
     res = await apiFetch('/reframe', {
       method: 'POST',
       token: auth.token,
@@ -172,6 +185,7 @@ async function withBusy(tabId, fn) {
     return await fn();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) await clearAuth();
+    if (err instanceof ApiError && err.status === 429) cooldownUntil = Date.now() + err.retryAfter * 1000;
     chrome.tabs.sendMessage(tabId, { type: 'rf:pending', on: false }).catch(() => {});
     const message = err instanceof ApiError || err instanceof PageError ? err.message : 'Something went wrong.';
     await pushChat(tabId, { role: 'error', content: message });
@@ -184,6 +198,11 @@ async function withBusy(tabId, fn) {
 
 async function handleChat(tabId, text) {
   if (busyTabs.has(tabId)) return { error: 'busy' };
+  const wait = cooldownLeft();
+  if (wait) {
+    await pushChat(tabId, { role: 'error', content: `Please wait ${wait} seconds and try again.` });
+    return { error: 'cooldown' };
+  }
   return withBusy(tabId, () => runReframe(tabId, text));
 }
 
@@ -192,6 +211,7 @@ async function handleChat(tabId, text) {
 async function shouldContinue(tabId, goal) {
   if (!goal?.message) return false;
   if ((goal.autoRebuilds || 0) >= MAX_AUTO_REBUILDS) return false;
+  if (cooldownLeft()) return false;
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   const sameSite = tab && siteOf(tab.url) === goal.site;
   const fromOurButton = Date.now() - (lastAction.get(tabId) || 0) < ACTION_WINDOW_MS;

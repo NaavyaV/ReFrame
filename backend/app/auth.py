@@ -1,3 +1,4 @@
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -9,11 +10,16 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
 
 from .config import get_settings
+from .ratelimit import SlidingWindow
 from .stdb import SpacetimeClient, SpacetimeError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 _hasher = PasswordHasher()
 _bearer = HTTPBearer(auto_error=False)
+_auth_window: SlidingWindow | None = None
+# Verified users, so each authenticated request doesn't need a SpacetimeDB lookup.
+_USER_CACHE_TTL = 60.0
+_user_cache: dict[str, tuple[float, "PublicUser"]] = {}
 
 
 class RegisterBody(BaseModel):
@@ -42,6 +48,13 @@ def _stdb(request: Request) -> SpacetimeClient:
     return request.app.state.stdb
 
 
+def limit_auth(request: Request) -> None:
+    global _auth_window
+    if _auth_window is None:
+        _auth_window = SlidingWindow(get_settings().auth_per_minute, 60)
+    _auth_window.hit(request.client.host if request.client else "unknown")
+
+
 def _issue_token(user_id: str) -> str:
     s = get_settings()
     now = datetime.now(timezone.utc)
@@ -63,13 +76,22 @@ async def current_user(
         payload = jwt.decode(creds.credentials, get_settings().jwt_secret, algorithms=["HS256"])
     except jwt.PyJWTError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired")
-    row = await _stdb(request).find_user_by_id(payload["sub"])
+    user_id = payload["sub"]
+    cached = _user_cache.get(user_id)
+    if cached and time.monotonic() - cached[0] < _USER_CACHE_TTL:
+        return cached[1]
+    row = await _stdb(request).find_user_by_id(user_id)
     if row is None:
+        _user_cache.pop(user_id, None)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Account not found")
-    return _public(row)
+    user = _public(row)
+    if len(_user_cache) > 10_000:
+        _user_cache.clear()
+    _user_cache[user_id] = (time.monotonic(), user)
+    return user
 
 
-@router.post("/register", response_model=AuthResponse)
+@router.post("/register", response_model=AuthResponse, dependencies=[Depends(limit_auth)])
 async def register(body: RegisterBody, request: Request) -> AuthResponse:
     db = _stdb(request)
     email = body.email.lower()
@@ -88,7 +110,7 @@ async def register(body: RegisterBody, request: Request) -> AuthResponse:
     )
 
 
-@router.post("/login", response_model=AuthResponse)
+@router.post("/login", response_model=AuthResponse, dependencies=[Depends(limit_auth)])
 async def login(body: LoginBody, request: Request) -> AuthResponse:
     db = _stdb(request)
     row = await db.find_user_by_email(body.email.lower())

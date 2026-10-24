@@ -1,15 +1,14 @@
-import asyncio
 import json
 import logging
 import re
 import time
 from urllib.parse import urlsplit
 
-from groq import AsyncGroq, BadRequestError, NotFoundError, RateLimitError
+from groq import AsyncGroq, BadRequestError, RateLimitError
 from pydantic import TypeAdapter, ValidationError
 
 from .config import get_settings
-from .quick import quick_reframe
+from .ratelimit import GroqBudget, RateLimited
 from .schemas import (
     Operation,
     ReframeRequest,
@@ -254,9 +253,10 @@ def _validate_ops(raw_ops: list, snapshot: Snapshot) -> tuple[list, int]:
     return valid, dropped
 
 
-FALLBACK_MODEL = "openai/gpt-oss-120b"
-RATE_LIMIT_MODEL = "openai/gpt-oss-20b"
+# Groq reserves max tokens against the per-minute token budget, so keep this near real output size.
+MAX_COMPLETION_TOKENS = 1000
 _client: AsyncGroq | None = None
+_budget: GroqBudget | None = None
 
 
 def _groq() -> AsyncGroq:
@@ -266,49 +266,50 @@ def _groq() -> AsyncGroq:
     return _client
 
 
-async def _complete_once(model: str, messages: list[dict]):
-    return await _groq().chat.completions.create(
-        model=model,
-        messages=messages,
-        response_format={"type": "json_object"},
-        temperature=0.2,
-        # Groq reserves max tokens against the per-minute token budget, so keep this near real output size.
-        max_completion_tokens=1000,
-        **({"reasoning_effort": "low"} if "gpt-oss" in model else {}),
-    )
+def _groq_budget() -> GroqBudget:
+    global _budget
+    if _budget is None:
+        s = get_settings()
+        _budget = GroqBudget(s.groq_rpm, s.groq_tpm, s.groq_rpd, s.groq_tpd, s.groq_max_wait)
+    return _budget
+
+
+def _estimate_tokens(messages: list[dict]) -> int:
+    # ~4 chars per token plus per-message overhead; settled with real usage after the call.
+    return sum(len(m["content"]) // 4 + 8 for m in messages) + MAX_COMPLETION_TOKENS
 
 
 def _retry_after(err: RateLimitError) -> float:
     try:
-        return float(err.response.headers.get("retry-after", "2"))
+        return float(err.response.headers.get("retry-after", "10"))
     except (TypeError, ValueError):
-        return 2.0
+        return 10.0
 
 
 async def _complete(model: str, messages: list[dict]):
+    """One Groq call, throttled by the shared budget. A 429 pauses all calls; it is never retried here."""
+    budget = _groq_budget()
+    entry = await budget.acquire(_estimate_tokens(messages))
     try:
-        return await _complete_once(model, messages)
+        completion = await _groq().chat.completions.create(
+            model=model,
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0.2,
+            max_completion_tokens=MAX_COMPLETION_TOKENS,
+            **({"reasoning_effort": "low"} if "gpt-oss" in model else {}),
+        )
     except RateLimitError as err:
         wait = _retry_after(err)
-        if model != RATE_LIMIT_MODEL:
-            log.warning("Groq rate limit on %s (retry in %.1fs); using %s", model, wait, RATE_LIMIT_MODEL)
-            try:
-                return await _complete_once(RATE_LIMIT_MODEL, messages)
-            except RateLimitError as err2:
-                wait = min(wait, _retry_after(err2))
-        if wait > 6:
-            raise
-        await asyncio.sleep(wait)
-        return await _complete_once(model, messages)
+        log.warning("Groq rate limit on %s; pausing model calls for %.1fs", model, wait)
+        budget.cooldown(wait)
+        raise RateLimited(wait) from err
+    if completion.usage is not None:
+        budget.settle(entry, completion.usage.total_tokens)
+    return completion
 
 
 async def reframe(req: ReframeRequest) -> ReframeResponse:
-    if not req.continuation:
-        quick = quick_reframe(req.message, req.applied)
-        if quick is not None:
-            log.info("reframe handled locally: %s", [o.op for o in quick.operations])
-            return quick
-
     s = get_settings()
     model = s.groq_fast_model if req.continuation else s.groq_model
     messages = _build_messages(req)
@@ -323,12 +324,6 @@ async def reframe(req: ReframeRequest) -> ReframeResponse:
                 raise
             log.warning("Groq rejected malformed JSON (attempt %d); retrying", attempt + 1)
             continue
-        except NotFoundError:
-            if model == FALLBACK_MODEL:
-                raise
-            log.warning("Groq model %s not found, using %s", model, FALLBACK_MODEL)
-            model = FALLBACK_MODEL
-            completion = await _complete(model, messages)
         usage = completion.usage
         if usage is not None:
             log.info(
@@ -343,6 +338,10 @@ async def reframe(req: ReframeRequest) -> ReframeResponse:
             break
         except json.JSONDecodeError:
             log.warning("Groq returned invalid JSON (attempt %d)", attempt + 1)
+            if completion.choices[0].finish_reason == "length":
+                # The same prompt would be cut off again; don't spend another call on it.
+                log.warning("output hit max_completion_tokens=%d; not retrying", MAX_COMPLETION_TOKENS)
+                break
 
     model_ms = int((time.perf_counter() - started) * 1000)
     if not isinstance(data, dict):
