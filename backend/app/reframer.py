@@ -33,16 +33,16 @@ CONSEQUENTIAL_LINK = re.compile(
 _TAG_WITH_REF = re.compile(r"<[a-zA-Z][^<>]*?\bdata-rf-(target|bind)\s*=\s*[\"'](r\d{1,5})[\"'][^<>]*>")
 
 SYSTEM_PROMPT = """You are ReFrame, a front-end accessibility layer for older adults. You only change how the \
-CURRENT page looks. Reply with ONE JSON object:
+CURRENT page looks. Reply with ONE valid JSON object (plain string values, no code or concatenation):
 {"reply":"<one short plain sentence naming the next button>","done":false,"operations":[...]}
 "done": true only when this page shows the goal is finished (e.g. a confirmation) and no more help is needed.
 
 OPS
 render {"op":"render","html":"...","css":"...","isolate":true,"keep_refs":["rN"]}
   HTML is placed in the page under the site header, in a centered 880px column; the rest is hidden (popups too).
-  keep_refs = the header ref from THEME.header.ref. Build ONE full-width panel: heading, optional short info copied from the page, then full-width stacked buttons
-  (>=60px tall, 20-24px text, left-aligned), primary first. Match the site: put the real class names from
-  .cls / THEME.card.cls / THEME.button.cls / THEME.heading.cls on your elements, use THEME colours/fonts; no new visual style. Keep css short (auto-scoped).
+  keep_refs = the "ref" value of THEME header. Build ONE full-width panel: heading, optional short info copied from the page, then full-width stacked buttons
+  (>=60px tall, 20-24px text, left-aligned), primary first. Match the site: copy the literal "cls" values from THEME
+  (card, button, heading) and PAGE into class="..." attributes, use THEME colours/fonts; no new visual style. Keep css short (auto-scoped).
   <button data-rf-target="rN">label</button> clicks real element rN; <input|select data-rf-bind="rN"> mirrors
   real field rN. data-rf-primary="1" on the single next step; data-rf-confirm="1" on pay/submit/delete/buy/send.
   Labels say what the button really does; a link leading toward the goal is "Go to <place>".
@@ -234,6 +234,12 @@ def _validate_ops(raw_ops: list, snapshot: Snapshot) -> tuple[list, int]:
             dropped += 1
             continue
         if isinstance(op, RenderOp):
+            if op.isolate:
+                # Isolation already hides the rest of the page; only the site header stays visible.
+                header = (snapshot.theme.get("header") or {}).get("ref") if snapshot.theme else None
+                op.keep_refs = [header] if header in by_ref else []
+                op.anchor_ref = None
+                op.position = "prepend"
             checked = _check_render(op, by_ref, snapshot)
             if checked is None:
                 log.warning("dropped render: %s", op.html[:300])
@@ -250,11 +256,13 @@ def _validate_ops(raw_ops: list, snapshot: Snapshot) -> tuple[list, int]:
                 dropped += 1
                 continue
         valid.append(op)
+    if any(isinstance(o, RenderOp) and o.isolate for o in valid):
+        valid = [o for o in valid if o.op not in ("hide", "highlight", "scroll_to")]
     return valid, dropped
 
 
 # Groq reserves max tokens against the per-minute token budget, so keep this near real output size.
-MAX_COMPLETION_TOKENS = 1000
+MAX_COMPLETION_TOKENS = 1500
 _client: AsyncGroq | None = None
 _budget: GroqBudget | None = None
 
@@ -309,6 +317,19 @@ async def _complete(model: str, messages: list[dict]):
     return completion
 
 
+def _salvage(err: BadRequestError) -> dict | None:
+    body = err.body if isinstance(err.body, dict) else {}
+    text = (body.get("error") or body).get("failed_generation") or ""
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        data = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 async def reframe(req: ReframeRequest) -> ReframeResponse:
     s = get_settings()
     model = s.groq_fast_model if req.continuation else s.groq_model
@@ -320,9 +341,13 @@ async def reframe(req: ReframeRequest) -> ReframeResponse:
         try:
             completion = await _complete(model, messages)
         except BadRequestError as err:
-            if "json_validate_failed" not in str(err) or attempt == 1:
+            if "json_validate_failed" not in str(err):
                 raise
-            log.warning("Groq rejected malformed JSON (attempt %d); retrying", attempt + 1)
+            data = _salvage(err)
+            if data is not None:
+                log.warning("Groq rejected JSON (attempt %d); salvaged it", attempt + 1)
+                break
+            log.warning("Groq rejected malformed JSON (attempt %d)", attempt + 1)
             continue
         usage = completion.usage
         if usage is not None:
@@ -350,6 +375,8 @@ async def reframe(req: ReframeRequest) -> ReframeResponse:
     ops, dropped = _validate_ops(data.get("operations", []), req.snapshot)
     reply = str(data.get("reply") or "").strip()[:600] or ("Done." if ops else "I couldn't change this page.")
     log.info("reframe model=%s ms=%d ops=%d dropped=%d", model, model_ms, len(ops), dropped)
+    log.info("reframe url=%s msg=%r reply=%r ops=%s", req.snapshot.url[:80], req.message[:80], reply[:120],
+             [o.model_dump(exclude_none=True) | ({"html": o.html[:160]} if isinstance(o, RenderOp) else {}) for o in ops])
     return ReframeResponse(
         reply=reply, operations=ops, dropped=dropped, model_ms=model_ms, done=bool(data.get("done"))
     )
