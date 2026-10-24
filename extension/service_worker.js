@@ -13,6 +13,8 @@ const busyTabs = new Set();
 const pendingRebuild = new Set();
 const debounceTimers = new Map();
 const lastAction = new Map();
+const retriedRebuild = new Set();
+const MAX_QUIET_RETRY_S = 20;
 // Set when the server answers 429; no automatic rebuilds or chats are sent before this time.
 let cooldownUntil = 0;
 
@@ -179,14 +181,17 @@ async function runReframe(tabId, text, { continuation = false } = {}) {
   return { ok: true };
 }
 
-async function withBusy(tabId, fn) {
+async function withBusy(tabId, fn, { onLimit } = {}) {
   await setBusy(tabId, true);
   try {
     return await fn();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) await clearAuth();
-    if (err instanceof ApiError && err.status === 429) cooldownUntil = Date.now() + err.retryAfter * 1000;
     chrome.tabs.sendMessage(tabId, { type: 'rf:pending', on: false }).catch(() => {});
+    if (err instanceof ApiError && err.status === 429) {
+      cooldownUntil = Date.now() + err.retryAfter * 1000;
+      if (onLimit) return onLimit(err);
+    }
     const message = err instanceof ApiError || err instanceof PageError ? err.message : 'Something went wrong.';
     await pushChat(tabId, { role: 'error', content: message });
     return { error: message };
@@ -229,7 +234,15 @@ async function continueGoal(tabId) {
     return;
   }
   chrome.tabs.sendMessage(tabId, { type: 'rf:pending', on: true }).catch(() => {});
-  await withBusy(tabId, () => runReframe(tabId, goal.message, { continuation: true }));
+  await withBusy(tabId, () => runReframe(tabId, goal.message, { continuation: true }), {
+    // An automatic rebuild that hits a limit retries once, quietly, instead of posting an error.
+    onLimit: (err) => {
+      if (retriedRebuild.has(tabId) || err.retryAfter > MAX_QUIET_RETRY_S) return { error: err.message };
+      retriedRebuild.add(tabId);
+      setTimeout(() => continueGoal(tabId).finally(() => retriedRebuild.delete(tabId)), err.retryAfter * 1000 + 250);
+      return { error: 'retrying' };
+    },
+  });
 }
 
 function schedulePageChange(tabId, delay = 150) {

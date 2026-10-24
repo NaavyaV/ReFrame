@@ -53,7 +53,7 @@ def quick_reframe(message: str, applied: list[str]) -> ReframeResponse | None:
         return None
 
     if "restore" in found:
-        return ReframeResponse(reply="Back to the original page.", operations=[RestoreOp(op="restore")])
+        return ReframeResponse(reply="All set — the page is back to how it was.", operations=[RestoreOp(op="restore")])
 
     style: dict = {}
     scale = _current_scale(applied)
@@ -81,4 +81,24 @@ def quick_reframe(message: str, applied: list[str]) -> ReframeResponse | None:
         style["line_height"] = 1.8
     if not style:
         return None
-    return ReframeResponse(reply="Done.", operations=[PageStyleOp(op="page_style", **style)])
+    return ReframeResponse(reply=_style_reply(found), operations=[PageStyleOp(op="page_style", **style)])
+
+
+_REPLIES = {
+    "bigger": "I made the text bigger. Say \"bigger\" again if you'd like it larger.",
+    "smaller": "I made the text a little smaller.",
+    "dark": "I switched the page to dark colours.",
+    "light": "I switched the page back to light colours.",
+    "contrast": "I made the text stand out more.",
+    "hide_images": "I hid the pictures so the page is calmer.",
+    "show_images": "The pictures are back.",
+    "reduce_motion": "I stopped the moving parts on the page.",
+    "readable_font": "I changed the text to an easier-to-read font.",
+    "underline_links": "Links are underlined now so they're easy to spot.",
+    "spacing": "I added more space between lines.",
+}
+
+
+def _style_reply(found: list[str]) -> str:
+    replies = [_REPLIES[k] for k in _REPLIES if k in found]
+    return replies[0] if len(replies) == 1 else "Done — I changed how the page looks."

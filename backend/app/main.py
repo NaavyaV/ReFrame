@@ -62,7 +62,8 @@ async def reframe_page(
         if quick is not None:
             log.info("reframe handled locally: %s", [o.op for o in quick.operations])
             return quick
-    async with request.app.state.user_limiter.slot(user.user_id):
+    # Only messages the user types count; automatic page rebuilds are bounded by the extension and Groq budget.
+    async with request.app.state.user_limiter.slot(user.user_id, count=not body.continuation):
         try:
             return await reframe(body)
         except APIError as err:

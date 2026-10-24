@@ -49,11 +49,12 @@ class UserLimiter:
         self._active: set[str] = set()
 
     @asynccontextmanager
-    async def slot(self, user_id: str):
+    async def slot(self, user_id: str, count: bool = True):
         if user_id in self._active:
             raise RateLimited(2, "Still working on your last request.")
-        for window in self._windows:
-            window.hit(user_id)
+        if count:
+            for window in self._windows:
+                window.hit(user_id)
         self._active.add(user_id)
         try:
             yield

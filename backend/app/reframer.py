@@ -34,7 +34,9 @@ _TAG_WITH_REF = re.compile(r"<[a-zA-Z][^<>]*?\bdata-rf-(target|bind)\s*=\s*[\"']
 
 SYSTEM_PROMPT = """You are ReFrame, a front-end accessibility layer for older adults. You only change how the \
 CURRENT page looks. Reply with ONE valid JSON object (plain string values, no code or concatenation):
-{"reply":"<one short plain sentence naming the next button>","done":false,"operations":[...]}
+{"reply":"...","done":false,"operations":[...]}
+"reply": 1-2 warm, everyday sentences to an older adult: what this page now shows and the exact label of the
+  data-rf-primary button to press next. Only describe what is really on the page. Never just a button name, no jargon.
 "done": true only when this page shows the goal is finished (e.g. a confirmation) and no more help is needed.
 
 OPS
@@ -155,7 +157,8 @@ def _build_messages(req: ReframeRequest) -> list[dict]:
             messages.append({"role": "assistant", "content": "Noted."})
     applied = ", ".join(req.applied) if req.applied else "nothing"
     intro = (
-        "The user just moved to this page while working on the request below. Rebuild this page for it."
+        "The user just moved to this page while working on the request below. Rebuild this page for it; "
+        "the reply says where they are now and what to press next."
         if req.continuation
         else "User request."
     )
@@ -263,6 +266,8 @@ def _validate_ops(raw_ops: list, snapshot: Snapshot) -> tuple[list, int]:
 
 # Groq reserves max tokens against the per-minute token budget, so keep this near real output size.
 MAX_COMPLETION_TOKENS = 1500
+# Typical reply size; the reservation is replaced by real usage once the call returns.
+EXPECTED_OUTPUT_TOKENS = 400
 _client: AsyncGroq | None = None
 _budgets: dict[str, GroqBudget] = {}
 
@@ -284,7 +289,7 @@ def _groq_budget(model: str) -> GroqBudget:
 
 def _estimate_tokens(messages: list[dict]) -> int:
     # ~4 chars per token plus per-message overhead; settled with real usage after the call.
-    return sum(len(m["content"]) // 4 + 8 for m in messages) + MAX_COMPLETION_TOKENS
+    return sum(len(m["content"]) // 4 + 8 for m in messages) + EXPECTED_OUTPUT_TOKENS
 
 
 def _retry_after(err: RateLimitError) -> float:
@@ -361,9 +366,11 @@ async def reframe(req: ReframeRequest) -> ReframeResponse:
     started = time.perf_counter()
 
     data: dict | None = None
+    used_model = model
     for attempt in range(2):
         try:
             completion = await _complete(model, messages)
+            used_model = completion.model or model
         except BadRequestError as err:
             if "json_validate_failed" not in str(err):
                 raise
@@ -398,7 +405,7 @@ async def reframe(req: ReframeRequest) -> ReframeResponse:
 
     ops, dropped = _validate_ops(data.get("operations", []), req.snapshot)
     reply = str(data.get("reply") or "").strip()[:600] or ("Done." if ops else "I couldn't change this page.")
-    log.info("reframe model=%s ms=%d ops=%d dropped=%d", model, model_ms, len(ops), dropped)
+    log.info("reframe model=%s ms=%d ops=%d dropped=%d", used_model, model_ms, len(ops), dropped)
     log.info("reframe url=%s msg=%r reply=%r ops=%s", req.snapshot.url[:80], req.message[:80], reply[:120],
              [o.model_dump(exclude_none=True) | ({"html": o.html[:160]} if isinstance(o, RenderOp) else {}) for o in ops])
     return ReframeResponse(
