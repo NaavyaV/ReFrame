@@ -2,35 +2,50 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>BrightGrid Energy | My Account Overview</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="topbar"><a href="#">Residential</a><a href="#">Business</a><a href="#">Español</a><a href="#">Careers</a><a href="#">Investors</a><a href="#">Newsroom</a></div>
+  <div class="alert-strip">⚠ Planned maintenance Sat 11/1, 1–5 AM may affect online payments. <a href="#">Details</a> · <a href="#">Outage map</a> · <a href="#">Text alerts</a></div>
+  <div class="topbar"><a href="#">Residential</a><a href="#">Business</a><a href="#">Español</a><a href="#">中文</a><a href="#">Careers</a><a href="#">Investors</a><a href="#">Newsroom</a><a href="#">Suppliers</a><span class="spacer"></span><a href="#">Find a location</a><a href="#">Sign out</a></div>
   <header>
     <div class="logo">BrightGrid</div>
     <nav class="mega" aria-label="Main">
       <a href="#">Save Energy</a><a href="#">Rebates &amp; Programs</a><a href="#">Solar Solutions</a>
       <a href="#">Outages &amp; Safety</a><a href="billing.html">Account Center</a><a href="#">Smart Home Store</a>
-      <a href="#">Community</a><a href="#">Help</a>
+      <a href="#">EV Charging</a><a href="#">Community</a><a href="#">Help</a>
     </nav>
+    <form class="search" onsubmit="event.preventDefault()"><input aria-label="Search" placeholder="Search BrightGrid" /><button class="small-btn" type="submit">Go</button></form>
   </header>
+  <div class="crumbs"><a href="#">Home</a> › <a href="#">My Account</a> › Overview</div>
   <div class="layout">
     <aside>
       <strong>Quick links</strong>
       <a href="#">Start / Stop / Move</a><a href="#">Report streetlight</a><a href="#">Tree trimming</a>
       <a href="#">Construction services</a><a href="#">Interconnection</a><a href="billing.html">Billing &amp; Payment Options</a>
-      <a href="#">Rate plans</a><a href="#">Medical baseline</a>
+      <a href="#">Rate plans</a><a href="#">Medical baseline</a><a href="#">Report a gas leak</a><a href="#">Landlord services</a>
+      <a href="#">Name change</a><a href="#">Deposit refunds</a>
+      <strong>Programs</strong>
+      <a href="#">CARE discount</a><a href="#">FERA</a><a href="#">Energy Savings Assistance</a><a href="#">Demand response</a>
+      <a href="#">Peak day pricing</a><a href="#">Community solar</a>
     </aside>
     <main>
       <h2>Welcome back, Margaret</h2>
-      <p>Account #••••4471 · Service address on file</p>
+      <p>Account #••••4471 · Service address on file · Rate plan E-TOU-C · <a href="#">Change</a></p>
       <div class="tiles">
-        <div class="tile">Usage this month<br /><b>412 kWh</b></div>
+        <div class="tile">Usage this month<br /><b>412 kWh</b><br /><span class="muted">▲ 6% vs last year</span></div>
         <div class="tile">Current balance<br /><b>$84.12</b><br />Due Nov 3</div>
-        <div class="tile"><a href="#">Energy insights</a></div>
-        <div class="tile"><a href="billing.html">Manage account</a></div>
+        <div class="tile"><a href="#">Energy insights</a><br /><span class="muted">Compare homes</span></div>
+        <div class="tile"><a href="billing.html">Manage account</a><br /><span class="muted">Profile, alerts</span></div>
       </div>
+      <div class="chart" aria-label="Daily usage chart">
+        <span style="height:40%"></span><span style="height:55%"></span><span style="height:35%"></span><span style="height:70%"></span>
+        <span style="height:62%"></span><span style="height:48%"></span><span style="height:80%"></span><span style="height:66%"></span>
+        <span style="height:52%"></span><span style="height:44%"></span><span style="height:90%"></span><span style="height:58%"></span>
+        <span style="height:38%"></span><span style="height:72%"></span>
+      </div>
+      <p class="muted">Daily usage (kWh), last 14 days · <a href="#">Download data</a> · <a href="#">Green Button</a></p>
       <h3>Latest news</h3>
       <p>BrightGrid announces grid modernization plan for 2027. Learn how infrastructure upgrades will improve reliability across the service territory.</p>
       <button class="small-btn" type="button">Read more</button>
@@ -38,15 +53,68 @@
     <aside>
       <div class="promo" id="promo-thermo">Save 20% on smart thermostats! Limited time only.</div>
       <div class="promo" id="promo-solar">Go solar with $0 down. Get a free quote today.</div>
+      <div class="promo alt">Refer a neighbor, get $25 credit*</div>
       <a href="#">Download our app</a>
+      <p class="fine">*Terms apply. Credit issued within 2 billing cycles. Not valid with other offers.</p>
     </aside>
   </div>
-  <footer>
-    <a href="#">About</a><a href="#">Privacy</a><a href="#">Terms</a><a href="#">Accessibility</a><a href="#">Sitemap</a>
-    <a href="#">Contact</a><a href="#">Suppliers</a><a href="#">Regulatory</a>
+
+  <section class="band">
+    <h3>Ways to save this season</h3>
+    <div class="cards">
+      <div class="card"><b>Weatherize your home</b><p>Rebates up to $500 on insulation and window upgrades.</p><a href="#">Learn more</a></div>
+      <div class="card"><b>Time-of-use tips</b><p>Run appliances after 9 PM to lower your bill.</p><a href="#">See tips</a></div>
+      <div class="card"><b>EV charging rate</b><p>Special overnight pricing for electric vehicles.</p><a href="#">Compare plans</a></div>
+      <div class="card"><b>Free home energy audit</b><p>Schedule a virtual audit in 15 minutes.</p><a href="#">Book now</a></div>
+      <div class="card"><b>Appliance recycling</b><p>Get $50 for your old refrigerator.</p><a href="#">Schedule pickup</a></div>
+      <div class="card"><b>Smart thermostat rebate</b><p>Instant $75 off at checkout.</p><a href="#">Shop</a></div>
+    </div>
+  </section>
+
+  <section class="band split">
+    <div>
+      <h3>Outages near you</h3>
+      <div class="map" aria-label="Outage map"><i style="left:22%;top:30%"></i><i style="left:58%;top:62%"></i><i style="left:74%;top:24%"></i></div>
+      <p class="muted">3 active outages · 412 customers affected · Updated 4 min ago · <a href="#">Full map</a></p>
+    </div>
+    <div>
+      <h3>Community &amp; events</h3>
+      <ul class="list">
+        <li><b>Nov 2</b> Energy fair at Riverside Library <a href="#">RSVP</a></li>
+        <li><b>Nov 8</b> Solar 101 webinar <a href="#">Register</a></li>
+        <li><b>Nov 15</b> Tree planting volunteer day <a href="#">Sign up</a></li>
+        <li><b>Nov 21</b> Small business grant workshop <a href="#">Details</a></li>
+        <li><b>Dec 3</b> Holiday lights safety talk <a href="#">Details</a></li>
+      </ul>
+    </div>
+    <div>
+      <h3>Frequently asked</h3>
+      <details><summary>Why is my bill higher this month?</summary><p>Usage often rises with cooler weather and heating.</p></details>
+      <details><summary>How do I set up AutoPay?</summary><p>Go to Account Center and choose AutoPay enrollment.</p></details>
+      <details><summary>What is a time-of-use plan?</summary><p>Prices change depending on the time of day.</p></details>
+      <details><summary>How do I report a downed line?</summary><p>Stay away and call 1-800-555-0199 right away.</p></details>
+      <details><summary>Can I get paper bills?</summary><p>Yes, update paperless settings in your profile.</p></details>
+    </div>
+  </section>
+
+  <section class="band newsletter">
+    <div><b>Get energy tips in your inbox</b><p class="muted">Monthly savings ideas, outage alerts, and program news.</p></div>
+    <form onsubmit="event.preventDefault()"><input aria-label="Email for newsletter" placeholder="Email address" /><button class="small-btn" type="submit">Subscribe</button></form>
+    <div class="apps"><span class="badge">App Store</span><span class="badge">Google Play</span></div>
+  </section>
+
+  <footer class="mega-footer">
+    <div><b>Account</b><a href="#">Pay bill</a><a href="#">View usage</a><a href="#">AutoPay</a><a href="#">Paperless</a><a href="#">Budget billing</a></div>
+    <div><b>Services</b><a href="#">Start service</a><a href="#">Stop service</a><a href="#">Move</a><a href="#">Outages</a><a href="#">Construction</a></div>
+    <div><b>Save</b><a href="#">Rebates</a><a href="#">Programs</a><a href="#">Solar</a><a href="#">EV</a><a href="#">Audits</a></div>
+    <div><b>Company</b><a href="#">About</a><a href="#">Careers</a><a href="#">Newsroom</a><a href="#">Investors</a><a href="#">Suppliers</a></div>
+    <div><b>Help</b><a href="#">Contact</a><a href="#">Accessibility</a><a href="#">Privacy</a><a href="#">Terms</a><a href="#">Sitemap</a><a href="#">Regulatory</a></div>
   </footer>
+  <div class="legal">© 2026 BrightGrid Energy Co. All rights reserved. BrightGrid is a regulated utility. Rates subject to change. Call 811 before you dig. TTY 711.</div>
+
+  <button class="chat-bubble" type="button">💬 Chat with us</button>
   <div class="cookie-banner" id="cookie-banner">
-    <span>We use cookies to improve your experience.</span>
+    <span>We use cookies to improve your experience. <a href="#">Cookie settings</a></span>
     <button class="small-btn" type="button" onclick="this.parentElement.remove()">Accept all</button>
   </div>
 </body>

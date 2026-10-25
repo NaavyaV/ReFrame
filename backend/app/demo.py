@@ -1,0 +1,152 @@
+"""Scripted walkthrough for the BrightGrid demo site, so demos are fast and identical every time.
+
+Only applies to the demo hosts below; every other site goes through the model.
+"""
+
+import asyncio
+import random
+import re
+from urllib.parse import urlsplit
+
+from .schemas import ReframeRequest, ReframeResponse, RenderOp, SnapElement
+
+DEMO_HOSTS = {"127.0.0.1:5173", "localhost:5173", "reframe-demo.pages.dev"}
+DEMO_HOST_SUFFIX = ".reframe-demo.pages.dev"
+
+CSS = """
+.rf-demo{background:#fff;border:1px solid #d5dbe1;border-top:8px solid #0b4f8a;border-radius:18px;padding:40px;
+  font-family:Arial,Helvetica,sans-serif;color:#1d2a36;box-shadow:0 10px 32px rgba(11,79,138,.14)}
+.rf-kicker{font-size:18px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;color:#b07a00;margin:0 0 10px}
+.rf-demo h2{font-size:38px;line-height:1.2;color:#0b4f8a;margin:0 0 14px}
+.rf-demo p{font-size:24px;line-height:1.55;margin:0 0 26px}
+.rf-facts{display:flex;gap:16px;margin:0 0 30px}
+.rf-fact{flex:1;background:#f3f7fb;border:1px solid #d5dbe1;border-radius:14px;padding:20px 22px}
+.rf-fact span{display:block;font-size:20px;color:#5a6b7b;margin-bottom:6px}
+.rf-fact b{font-size:34px;color:#0b4f8a}
+.rf-big{display:block;width:100%;font-size:28px;font-weight:bold;padding:26px 28px;border:0;border-radius:14px;
+  background:#0b4f8a;color:#fff;text-align:center;cursor:pointer;box-shadow:0 6px 0 #073a66}
+.rf-big:hover{background:#0d5ea3}
+.rf-big:active{box-shadow:none}
+.rf-demo label{display:block;font-size:22px;font-weight:bold;margin:0 0 8px}
+.rf-demo input{display:block;width:100%;font-size:28px;padding:16px 18px;border:2px solid #8a99a8;border-radius:12px;
+  margin:0 0 24px;color:#1d2a36;background:#fff}
+.rf-demo input:focus{border-color:#0b4f8a;outline:4px solid #f2a900}
+.rf-two{display:flex;gap:16px}
+.rf-two>div{flex:1}
+.rf-check{width:110px;height:110px;border-radius:50%;background:#1f8a4c;color:#fff;font-size:64px;font-weight:bold;
+  display:flex;align-items:center;justify-content:center;margin:0 auto 22px}
+.rf-center{text-align:center}
+.rf-note{font-size:20px;color:#5a6b7b}
+"""
+
+
+def is_demo(url: str) -> bool:
+    host = urlsplit(url).netloc.lower()
+    return host in DEMO_HOSTS or host.endswith(DEMO_HOST_SUFFIX)
+
+
+def _page(url: str) -> str:
+    """'/billing.html', '/billing' (Cloudflare Pages pretty URLs) and '/' map to 'billing' / 'index'."""
+    name = urlsplit(url).path.rsplit("/", 1)[-1].removesuffix(".html")
+    return name or "index"
+
+
+def _link(elements: list[SnapElement], page: str, text: str | None = None) -> SnapElement | None:
+    links = [e for e in elements if e.kind == "control" and e.href and _page(e.href) == page]
+    if text:
+        links = [e for e in links if text.lower() in (e.text or "").lower()] or links
+    return links[0] if links else None
+
+
+def _field(elements: list[SnapElement], label: str) -> SnapElement | None:
+    return next((e for e in elements if e.kind == "control" and label.lower() in (e.label or "").lower()), None)
+
+
+def _button(elements: list[SnapElement], text: str) -> SnapElement | None:
+    return next((e for e in elements if e.kind == "control" and text.lower() in (e.text or "").lower()), None)
+
+
+def _render(html: str) -> RenderOp:
+    return RenderOp(op="render", html=html, css=CSS, isolate=True)
+
+
+def _step(req: ReframeRequest) -> ReframeResponse | None:
+    s = req.snapshot
+    els = s.elements
+    page = _page(s.url)
+    page_text = " ".join(e.text or "" for e in els)
+
+    if page == "pay" and "Payment submitted" in page_text:
+        confirmation = (re.search(r"BG-\d+", page_text) or ["BG-20491"])[0]
+        home = _link(els, "index")
+        if not home:
+            return None
+        return ReframeResponse(
+            reply=f"Your payment went through — confirmation {confirmation}. You're good to go, nothing else to do!",
+            operations=[_render(
+                '<div class="rf-demo rf-center"><div class="rf-check">✓</div>'
+                "<h2>Payment submitted!</h2>"
+                f"<p>You paid <b>$84.12</b>. Your confirmation number is <b>{confirmation}</b>.</p>"
+                '<p class="rf-note">You\'re all set. There is nothing else you need to do.</p>'
+                f'<button class="rf-big" data-rf-target="{home.ref}">Back to home</button></div>'
+            )],
+            done=True,
+        )
+
+    if page == "pay":
+        card, exp, cvv = _field(els, "card number"), _field(els, "expiration"), _field(els, "security code")
+        submit = _button(els, "submit payment")
+        if not (card and exp and cvv and submit):
+            return None
+        return ReframeResponse(
+            reply="I put the payment form in one place with big, easy boxes. Now type your card details and press \"Submit payment\".",
+            operations=[_render(
+                '<div class="rf-demo"><p class="rf-kicker">Step 3 of 3</p><h2>Enter your card</h2>'
+                "<p>You are paying <b>$84.12</b> to BrightGrid.</p>"
+                f'<label for="card">Card number</label><input id="card" data-rf-bind="{card.ref}" placeholder="1234 5678 9012 3456">'
+                '<div class="rf-two">'
+                f'<div><label for="exp">Expiration (MM/YY)</label><input id="exp" data-rf-bind="{exp.ref}" placeholder="MM/YY"></div>'
+                f'<div><label for="cvv">Security code</label><input id="cvv" data-rf-bind="{cvv.ref}" placeholder="3 digits"></div>'
+                "</div>"
+                f'<button class="rf-big" data-rf-target="{submit.ref}" data-rf-primary="1" data-rf-confirm="1">Submit payment</button></div>'
+            )],
+            done=True,
+        )
+
+    if page == "billing":
+        pay = _link(els, "pay")
+        if not pay:
+            return None
+        return ReframeResponse(
+            reply="I closed the survey pop-up and kept just your bill. Now press \"Make a one-time payment\".",
+            operations=[_render(
+                '<div class="rf-demo"><p class="rf-kicker">Step 2 of 3 · Account Center</p><h2>Pay your bill</h2>'
+                '<div class="rf-facts"><div class="rf-fact"><span>Amount due</span><b>$84.12</b></div>'
+                '<div class="rf-fact"><span>Due date</span><b>Nov 3, 2026</b></div></div>'
+                f'<button class="rf-big" data-rf-target="{pay.ref}" data-rf-primary="1">Make a one-time payment</button></div>'
+            )],
+            done=True,
+        )
+
+    if page == "index":
+        billing = _link(els, "billing", "payment")
+        if not billing:
+            return None
+        return ReframeResponse(
+            reply="I cleared away the clutter and kept only what you need. Now press \"Check payment options\".",
+            operations=[_render(
+                '<div class="rf-demo"><p class="rf-kicker">Step 1 of 3 · Welcome back, Margaret</p>'
+                "<h2>Your bill is $84.12</h2>"
+                "<p>It is due on <b>November 3</b>. When you're ready, press the big button below.</p>"
+                f'<button class="rf-big" data-rf-target="{billing.ref}" data-rf-primary="1">Check payment options</button></div>'
+            )],
+            done=True,
+        )
+    return None
+
+
+async def demo_reframe(req: ReframeRequest) -> ReframeResponse | None:
+    result = _step(req)
+    if result is not None:
+        await asyncio.sleep(random.uniform(1.5, 2.5))
+    return result

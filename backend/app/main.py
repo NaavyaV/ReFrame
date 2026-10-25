@@ -8,6 +8,7 @@ from groq import APIError
 
 from .auth import PublicUser, current_user, router as auth_router
 from .config import get_settings
+from .demo import demo_reframe, is_demo
 from .quick import quick_reframe
 from .ratelimit import RateLimited, UserLimiter
 from .reframer import reframe
@@ -62,6 +63,11 @@ async def reframe_page(
         if quick is not None:
             log.info("reframe handled locally: %s", [o.op for o in quick.operations])
             return quick
+        if is_demo(body.snapshot.url):
+            scripted = await demo_reframe(body)
+            if scripted is not None:
+                log.info("reframe demo step on %s", body.snapshot.url)
+                return scripted
     # Only messages the user types count; automatic page rebuilds are bounded by the extension and Groq budget.
     async with request.app.state.user_limiter.slot(user.user_id, count=not body.continuation):
         try:

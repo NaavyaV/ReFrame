@@ -108,6 +108,18 @@ async function cachePut(key, res) {
   await chrome.storage.session.set({ renderCache: Object.fromEntries(entries) });
 }
 
+// The BrightGrid demo site gets a scripted walkthrough from the server; show the page loader while it builds.
+const DEMO_HOSTS = ['127.0.0.1:5173', 'localhost:5173', 'reframe-demo.pages.dev'];
+
+function isDemoSite(url) {
+  try {
+    const { host } = new URL(url);
+    return DEMO_HOSTS.includes(host) || host.endsWith('.reframe-demo.pages.dev');
+  } catch {
+    return false;
+  }
+}
+
 function siteOf(url) {
   try {
     return new URL(url).hostname.split('.').slice(-2).join('.');
@@ -170,6 +182,7 @@ async function runReframe(tabId, text, { continuation = false } = {}) {
   let res = continuation ? await cacheGet(cacheKey) : null;
   if (!res) {
     if (continuation) await countAutoRebuild(tabId);
+    else if (isDemoSite(snapshot.url)) chrome.tabs.sendMessage(tabId, { type: 'rf:pending', on: true }).catch(() => {});
     res = await apiFetch('/reframe', {
       method: 'POST',
       token: auth.token,
