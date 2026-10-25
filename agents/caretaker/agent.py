@@ -8,15 +8,10 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from shared.local import agent_options, create_text_chat, relayed_session  # noqa: E402
+from uuid import uuid4
 
 from groq import Groq
 from uagents import Agent, Context, Protocol
@@ -24,18 +19,34 @@ from uagents_core.contrib.protocols.chat import (
     ChatAcknowledgement,
     ChatMessage,
     EndSessionContent,
-    MetadataContent,
     StartSessionContent,
     TextContent,
     chat_protocol_spec,
 )
+from uagents_core.registration import AgentRegistrationPolicy
 
 from db import Spacetime
 
+PORT = int(os.getenv("CARETAKER_PORT", "8020"))
+SEED = os.getenv("CAREGIVER_SEED", "").strip() or "reframe-caretaker-local"
 MODEL = os.getenv("GROQ_MODEL", "").strip() or "openai/gpt-oss-120b"
 
 
-agent = Agent(**agent_options("caretaker"))
+class SkipRegistration(AgentRegistrationPolicy):
+    async def register(self, agent_identifier, identity, protocols, endpoints, metadata=None):
+        return None
+
+
+agent = Agent(
+    name="caretaker",
+    seed=SEED,
+    port=PORT,
+    endpoint=[f"http://127.0.0.1:{PORT}/submit"],
+    mailbox=False,
+    registration_policy=SkipRegistration(),
+    publish_agent_details=False,
+    report_events=False,
+)
 
 chat_proto = Protocol(spec=chat_protocol_spec)
 db = Spacetime()
@@ -55,6 +66,10 @@ class Session:
 
 
 sessions: dict[str, Session] = {}
+
+
+def create_text_chat(text: str) -> ChatMessage:
+    return ChatMessage(content=[TextContent(text=text)], msg_id=uuid4(), timestamp=datetime.now(timezone.utc))
 
 
 def _complete(system: str, user: str) -> str:
@@ -203,24 +218,20 @@ async def handle_chat_message(ctx: Context, sender: str, msg: ChatMessage):
             acknowledged_msg_id=msg.msg_id,
         ),
     )
-    session = relayed_session(sender, msg)
-    key = session or sender
     for item in msg.content:
         if isinstance(item, StartSessionContent):
             ctx.logger.info(f"Session started with {sender}")
         elif isinstance(item, TextContent):
             ctx.logger.info(f"Text from {sender}: {item.text}")
             try:
-                reply = answer(key, item.text)
+                reply = answer(sender, item.text)
             except Exception as exc:
                 ctx.logger.error(f"Caretaker failed: {exc}")
                 reply = "I couldn't reach the records. Try again."
-            await ctx.send(sender, create_text_chat(reply, session))
+            await ctx.send(sender, create_text_chat(reply))
         elif isinstance(item, EndSessionContent):
             ctx.logger.info(f"Session ended with {sender}")
-            sessions.pop(key, None)
-        elif isinstance(item, MetadataContent):
-            pass
+            sessions.pop(sender, None)
         else:
             ctx.logger.info(f"Ignored content from {sender}")
 
