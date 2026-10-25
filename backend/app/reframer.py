@@ -306,7 +306,7 @@ def _pick_model(models: list[str], tokens: int) -> str:
     return ready[0] if ready else min(waits)[2]
 
 
-async def _complete(model: str, messages: list[dict]):
+async def _complete(model: str, messages: list[dict], json_mode: bool = True):
     """One Groq call, throttled per model; overflows to GROQ_FAST_MODEL when the main model is out of budget."""
     tokens = _estimate_tokens(messages)
     models = list(dict.fromkeys([model, get_settings().groq_fast_model]))
@@ -314,16 +314,16 @@ async def _complete(model: str, messages: list[dict]):
     if chosen != model:
         log.info("Groq budget low on %s; using %s", model, chosen)
     try:
-        return await _complete_on(chosen, messages, tokens)
+        return await _complete_on(chosen, messages, tokens, json_mode)
     except RateLimited:
         others = [m for m in models if m != chosen and _groq_budget(m).wait_for(tokens) == 0]
         if not others:
             raise
         log.info("Groq limit on %s; using %s", chosen, others[0])
-        return await _complete_on(others[0], messages, tokens)
+        return await _complete_on(others[0], messages, tokens, json_mode)
 
 
-async def _complete_on(model: str, messages: list[dict], tokens: int):
+async def _complete_on(model: str, messages: list[dict], tokens: int, json_mode: bool = True):
     """A 429 pauses calls to this model; it is never retried on the same model."""
     budget = _groq_budget(model)
     entry = await budget.acquire(tokens)
@@ -331,7 +331,7 @@ async def _complete_on(model: str, messages: list[dict], tokens: int):
         completion = await _groq().chat.completions.create(
             model=model,
             messages=messages,
-            response_format={"type": "json_object"},
+            **({"response_format": {"type": "json_object"}} if json_mode else {}),
             temperature=0.2,
             max_completion_tokens=MAX_COMPLETION_TOKENS,
             **({"reasoning_effort": "low"} if "gpt-oss" in model else {}),
@@ -348,7 +348,10 @@ async def _complete_on(model: str, messages: list[dict], tokens: int):
 
 def _salvage(err: BadRequestError) -> dict | None:
     body = err.body if isinstance(err.body, dict) else {}
-    text = (body.get("error") or body).get("failed_generation") or ""
+    return _extract_json((body.get("error") or body).get("failed_generation") or "")
+
+
+def _extract_json(text: str) -> dict | None:
     start, end = text.find("{"), text.rfind("}")
     if start < 0 or end <= start:
         return None
@@ -369,7 +372,8 @@ async def reframe(req: ReframeRequest) -> ReframeResponse:
     used_model = model
     for attempt in range(2):
         try:
-            completion = await _complete(model, messages)
+            # Groq's JSON mode rejects small slips outright; the retry parses the text itself.
+            completion = await _complete(model, messages, json_mode=attempt == 0)
             used_model = completion.model or model
         except BadRequestError as err:
             if "json_validate_failed" not in str(err):
@@ -378,7 +382,9 @@ async def reframe(req: ReframeRequest) -> ReframeResponse:
             if data is not None:
                 log.warning("Groq rejected JSON (attempt %d); salvaged it", attempt + 1)
                 break
-            log.warning("Groq rejected malformed JSON (attempt %d)", attempt + 1)
+            body = err.body if isinstance(err.body, dict) else {}
+            failed = str((body.get("error") or body).get("failed_generation") or "")
+            log.warning("Groq rejected malformed JSON (attempt %d): %r", attempt + 1, failed[:200])
             continue
         usage = completion.usage
         if usage is not None:
@@ -393,6 +399,9 @@ async def reframe(req: ReframeRequest) -> ReframeResponse:
             data = json.loads(content)
             break
         except json.JSONDecodeError:
+            data = _extract_json(content)
+            if data is not None:
+                break
             log.warning("Groq returned invalid JSON (attempt %d)", attempt + 1)
             if completion.choices[0].finish_reason == "length":
                 # The same prompt would be cut off again; don't spend another call on it.
