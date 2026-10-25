@@ -32,14 +32,18 @@ from shared.agents import (  # noqa: E402
 from shared.models import (  # noqa: E402
     SCRAPE_PROTOCOL,
     SCRAPER,
+    SITE_PROTOCOL,
     TECHNICAL_HELPER,
     ErrorInfo,
     PageLink,
     PageRequest,
     PageResponse,
+    PageVerdict,
     ScrapeFilters,
     ScrapeRequest,
     ScrapeResponse,
+    SiteResult,
+    SiteTask,
     TaskAck,
     new_id,
     now_iso,
@@ -48,6 +52,7 @@ from uagents import Agent, Context, Protocol  # noqa: E402
 
 from scraper.flow import Scraper  # noqa: E402
 from scraper.page import ScrapeError, fetch  # noqa: E402
+from scraper.site import SiteJobs  # noqa: E402
 
 RESULT_TTL_SECONDS = 900
 
@@ -143,6 +148,37 @@ def create(scraper: Scraper | None = None, **agent_options) -> tuple[Agent, Term
         ctx.logger.debug(f"Ack from {sender} for {msg.task_id}: {msg.status}")
 
     agent.include(proto, publish_manifest=True)
+
+    # Website tasks: from the orchestrator, checked page by page with the technical helper.
+    sites = SiteJobs(orchestrator=address("orchestrator"), technical_helper=helper)
+    site = Protocol(name=SITE_PROTOCOL[0], version=SITE_PROTOCOL[1])
+
+    async def send_all(ctx: Context, sends) -> None:
+        for send in sends:
+            kind = type(send.message).__name__
+            if kind == "PageCheck":
+                ctx.logger.info(f"[{send.message.task_id}] read {send.message.page.url}; asking the technical helper")
+            elif kind == "SiteResult":
+                ctx.logger.info(f"[{send.message.task_id}] {send.message.status} after {send.message.pages_read} "
+                                f"page(s); reporting to the orchestrator")
+            await ctx.send(send.to, send.message)
+
+    @site.on_message(SiteTask, replies={TaskAck, SiteResult})
+    async def on_site_task(ctx: Context, sender: str, msg: SiteTask):
+        ctx.logger.info(f"[{msg.task_id}] website task {msg.goal}: {msg.url}")
+        await send_all(ctx, await sites.on_task(sender, msg))
+
+    @site.on_message(PageVerdict)
+    async def on_verdict(ctx: Context, sender: str, msg: PageVerdict):
+        ctx.logger.info(f"[{msg.task_id}] technical helper: {msg.status}"
+                        + (f" ({len(msg.next_links)} link(s) to follow)" if msg.status == "next" else ""))
+        await send_all(ctx, await sites.on_verdict(sender, msg))
+
+    agent.include(site, publish_manifest=True)
+
+    @agent.on_interval(period=5.0)
+    async def sweep(ctx: Context):
+        await send_all(ctx, await sites.sweep())
 
     orchestrator = AGENTS["orchestrator"].display_name
 

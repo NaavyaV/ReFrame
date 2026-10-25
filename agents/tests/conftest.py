@@ -20,6 +20,7 @@ TEST_ENV = {
     "GROQ_API_KEY": "",
     "AGENTVERSE_API_KEY": "",
     "APIFY_API_TOKEN": "",
+    "STRIPE_SECRET_KEY": "",
     "SPACETIME_DB_NAME": "",
     "SPACETIME_TOKEN": "",
     "BRIDGE_SHARED_SECRET": "hmh-test-bridge-secret-0001",

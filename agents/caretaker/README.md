@@ -1,11 +1,15 @@
 # Hold My Hand Caregiver
 
 ## Summary
-Lets a trusted caregiver make small, approved adjustments to how Hold My Hand talks with an older adult,
-such as simpler wording or larger text. The person chooses what may be changed, sees every change and can
-undo it. It is not an administrator and can't buy anything or change what gets recommended.
+Tells a family member how the person they look after is doing, once they answer that person's security
+question, and keeps their notes for next time. It also lets a trusted caregiver make small, approved
+adjustments to how Hold My Hand talks with an older adult, such as simpler wording or larger text.
 
 ## What it does
+- "How is Maria doing?" gets the security question on Maria's record. A right answer gets what she's good
+  with and struggles with, from caretaker notes and her recent browser-helper runs. Three wrong answers lock
+  that person for an hour.
+- Anything said next, such as "Next time go slower on checkout pages", is saved as a caretaker note.
 - Creates a one-time invite code (valid 24 hours) when the person asks the Hold My Hand Orchestrator to add a
   caregiver and confirms which settings they may change.
 - Links the caregiver who sends that code. Their verified agent address is their identity from then on.
@@ -19,12 +23,15 @@ undo it. It is not an administrator and can't buy anything or change what gets r
 
 ## Constraints and scope
 - Refuses anything that could affect money or choices: budgets, blocked shops or brands, orders, payments.
-- No free text from a caregiver is ever passed to a language model or to the Orchestrator's instructions.
-- Settings are stored per person in SpacetimeDB. If that storage isn't set up, every change is refused with
+- No free text from a caregiver is ever passed to the Orchestrator's instructions. Saved notes are only
+  summarized back to family members who answered the security question.
+- Check-ins use the patient and caretaker_note tables. Settings are stored per person in SpacetimeDB. If that storage isn't set up, every change is refused with
   an explanation.
 - A caregiver can't see the person's conversations, searches or purchases.
 
 ## Example prompts
+- "Tell me how Maria Alvarez is doing"
+- "Next time point out the pay button"
 - "ABCD-EFGH" (the code the person gave you)
 - "Turn on simpler wording"
 - "Set language to Spanish"

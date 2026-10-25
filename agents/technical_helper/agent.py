@@ -31,7 +31,9 @@ from shared.agents import (  # noqa: E402
 )
 from shared.models import (  # noqa: E402
     SHOPPING_PROTOCOL,
+    PageCheck,
     PageResponse,
+    PageVerdict,
     ProductSearchTask,
     ScrapeResponse,
     TaskAck,
@@ -39,7 +41,7 @@ from shared.models import (  # noqa: E402
 )
 from uagents import Agent, Context, Protocol  # noqa: E402
 
-from technical_helper.flow import ProductSearches, Send, TechHelp  # noqa: E402
+from technical_helper.flow import PageReview, ProductSearches, Send, TechHelp  # noqa: E402
 
 
 async def send_all(ctx: Context, sends: list[Send]) -> None:
@@ -92,6 +94,19 @@ def create(searches: ProductSearches | None = None, help_desk: TechHelp | None =
     @scraping.on_message(PageResponse)
     async def on_page(ctx: Context, sender: str, msg: PageResponse):
         await send_all(ctx, await help_desk.on_page(sender, msg))
+
+    review = PageReview(scraper=scraper)
+
+    @scraping.on_message(PageCheck, replies={PageVerdict})
+    async def on_page_check(ctx: Context, sender: str, msg: PageCheck):
+        sends = review.on_check(sender, msg)
+        for send in sends:
+            verdict = send.message
+            detail = (f"payment page, button “{verdict.pay_button}”" if verdict.status == "found"
+                      else f"next: {', '.join(link.label for link in verdict.next_links) or 'nothing'}")
+            amount = f", amount {verdict.currency} {verdict.amount:.2f}" if verdict.amount is not None else ""
+            ctx.logger.info(f"[{msg.task_id}] {msg.page.url}: {detail}{amount}")
+        await send_all(ctx, sends)
 
     agent.include(scraping)
 

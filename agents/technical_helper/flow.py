@@ -9,16 +9,23 @@ thrown away if it mentions a number or link that isn't in the listing.
 Technical help: answer a how-do-I question step by step, reading one public page
 through the scraper first when the person mentioned a web address.
 
+Page review: the scraper sends each page it reads for a website task. The helper
+reads the amount due if the page shows one, accepts the page if it is the payment
+form, and otherwise names same-site links to follow next. The amount is read from
+the page text only, never guessed.
+
 Methods return the messages to send as Send(to_address, message); agent.py sends them.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
+from urllib.parse import urlsplit
 
 from uagents import Model
 
@@ -32,8 +39,11 @@ from shared.models import (
     SELECTED,
     TECHNICAL_HELPER,
     ErrorInfo,
+    PageCheck,
+    PageLink,
     PageRequest,
     PageResponse,
+    PageVerdict,
     ProductSearchTask,
     RecommendationResponse,
     ScrapeFilters,
@@ -482,3 +492,91 @@ class TechHelp:
             pending = self.pending.pop(key)
             sends.append(await self._respond(pending.task, pending.sender, None))
         return sends
+
+
+# Strongest wording first: "amount due" beats a plain "balance" or "total" elsewhere on the page.
+DUE_PHRASES = (
+    "total amount due", "amount due", "total due", "balance due", "amount owed", "payment due",
+    "amount to pay", "pay this amount", "current balance", "new balance", "account balance",
+    "statement balance", "bill amount", "your bill", "balance", "total",
+)
+CURRENCY_SIGNS = {"$": "USD", "£": "GBP", "€": "EUR"}
+PAY_WORDS = (("pay", 5), ("payment", 5), ("bill", 4), ("billing", 4), ("balance", 4), ("invoice", 4),
+             ("account", 2), ("statement", 2))
+MAX_NEXT_PAGES = 5
+
+
+def find_amount(text: str) -> tuple[float, str, str] | None:
+    """(amount, currency, the text it came from) for the amount due on a page, or None."""
+    for phrase in DUE_PHRASES:
+        pattern = re.compile(rf"\b{re.escape(phrase)}\b[^$£€\d]{{0,40}}([$£€])\s?(\d[\d,]*(?:\.\d{{1,2}})?)", re.I)
+        match = pattern.search(text)
+        if not match:
+            continue
+        value = float(match.group(2).replace(",", ""))
+        if 0 < value <= 100_000:
+            return value, CURRENCY_SIGNS[match.group(1)], clean_text(match.group(0), 120)
+    return None
+
+
+def _host(url: str) -> str:
+    return (urlsplit(url).hostname or "").rstrip(".").lower().removeprefix("www.")
+
+
+def _score(text: str) -> int:
+    text = text.lower()
+    return sum(weight for word, weight in PAY_WORDS if word in text)
+
+
+def next_pages(page: PageResponse, origin: str) -> list[PageLink]:
+    """Same-site links that look like a bill or payment page, best first, one per page.
+
+    When several links open the same page, the one whose own words say the most about
+    paying is the one a person is told to click.
+    """
+    root = _host(origin)
+    best: dict[str, tuple[int, int, PageLink]] = {}
+    for index, link in enumerate(page.links):
+        host = _host(link.url)
+        if not root or not (host == root or host.endswith("." + root)):
+            continue
+        score = _score(link.label) * 2 + _score(urlsplit(link.url).path)
+        if not score:
+            continue
+        current = best.get(link.url)
+        if current is None or score > current[0]:
+            best[link.url] = (score, -index, link)
+    ranked = sorted(best.values(), key=lambda item: (item[0], item[1]), reverse=True)
+    return [link for _, _, link in ranked[:MAX_NEXT_PAGES]]
+
+
+CARD_FIELD = re.compile(r"card|cvv|cvc|security code|expir|routing|account number|bank", re.I)
+PAY_BUTTON = re.compile(r"\b(?:submit|make|confirm|complete)\s+(?:my\s+|a\s+)?payment\b|\bpay\b", re.I)
+
+
+def pay_button(page: PageResponse) -> str:
+    """The button that sends a payment, if this page is a payment form."""
+    if not any(CARD_FIELD.search(name) for name in page.fields):
+        return ""
+    return next((button.label for button in page.buttons if PAY_BUTTON.search(button.label)), "")
+
+
+class PageReview:
+    def __init__(self, *, scraper: str) -> None:
+        self.scraper = scraper
+
+    def on_check(self, sender: str, check: PageCheck) -> list[Send]:
+        if sender != self.scraper:
+            return []
+        page = check.page
+        verdict = PageVerdict(task_id=check.task_id, request_id=check.request_id, sent_at=now_iso(), status="none")
+        found = find_amount(page.text)
+        if found:
+            verdict.amount, verdict.currency, verdict.evidence = found
+        verdict.pay_button = pay_button(page)
+        if verdict.pay_button:
+            verdict.status = "found"
+        else:
+            verdict.next_links = next_pages(page, check.origin)
+            verdict.status = "next" if verdict.next_links else "none"
+        return [Send(sender, verdict)]

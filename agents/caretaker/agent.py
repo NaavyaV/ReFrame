@@ -1,6 +1,10 @@
 """Hold My Hand Caregiver uAgent.
 
-Lets a caregiver the person has approved adjust a few response settings (simpler
+A family member asks how someone is doing, answers the security question on that
+person's record, hears what they're good with and struggle with, and leaves notes for
+next time (caretaker/checkin.py, patient and caretaker_note tables).
+
+It also lets a caregiver the person has approved adjust a few response settings (simpler
 wording, shorter explanations, larger-text hints, language, checking before bigger
 steps, pointing out clear features). It is not an administrator: it can't buy,
 read conversations, change recommendations or touch other agents. The person
@@ -36,7 +40,9 @@ from shared.models import (  # noqa: E402
 from shared.spacetime import Spacetime, SpacetimeNotConfigured  # noqa: E402
 from uagents import Agent, Context, Protocol  # noqa: E402
 
+from caretaker.checkin import CheckIn, strip_mentions  # noqa: E402
 from caretaker.flow import CaregiverService, for_orchestrator  # noqa: E402
+from caretaker.records import Records, SpacetimeRecords  # noqa: E402
 from caretaker.store import PreferenceStore, SpacetimeStore  # noqa: E402
 
 
@@ -47,10 +53,19 @@ def default_store() -> PreferenceStore | None:
         return None
 
 
-def create(service: CaregiverService | None = None, **agent_options) -> tuple[Agent, Terminal]:
+def default_records() -> Records | None:
+    try:
+        return SpacetimeRecords(Spacetime.from_env())
+    except SpacetimeNotConfigured:
+        return None
+
+
+def create(service: CaregiverService | None = None, checkin: CheckIn | None = None,
+           **agent_options) -> tuple[Agent, Terminal]:
     agent = make_agent("caregiver", **agent_options)
     orchestrator = address("orchestrator")
     service = service or CaregiverService(default_store(), orchestrator=orchestrator)
+    checkin = checkin or CheckIn(default_records())
 
     proto = Protocol(name=CAREGIVER_PROTOCOL[0], version=CAREGIVER_PROTOCOL[1])
 
@@ -81,16 +96,27 @@ def create(service: CaregiverService | None = None, **agent_options) -> tuple[Ag
     agent.include(proto, publish_manifest=True)
 
     async def on_chat(ctx: Context, sender: str, text: str) -> None:
-        reply, change = await service.chat(sender, text)
-        if change is not None:
-            ctx.logger.info(f"Caregiver {sender} set {change.setting} for {change.user_ref}: {change.status}")
-            await ctx.send(orchestrator, for_orchestrator(change))
+        text = strip_mentions(text)
+        reply = await checkin.reply(sender, text)
+        if reply is None:
+            reply, change = await service.chat(sender, text)
+            if change is not None:
+                ctx.logger.info(f"Caregiver {sender} set {change.setting} for {change.user_ref}: {change.status}")
+                await ctx.send(orchestrator, for_orchestrator(change))
         await deliver(ctx, sender, reply)
 
-    agent.include(chat_protocol(on_chat, ignore=own_agent), publish_manifest=True)
+    agent.include(chat_protocol(on_chat, on_end=checkin.end, ignore=own_agent), publish_manifest=True)
 
     @agent.on_event("startup")
     async def startup(ctx: Context):
+        if checkin.records is None:
+            ctx.logger.warning("Check-ins: OFF (SPACETIME_DB_NAME/SPACETIME_TOKEN not set).")
+        else:
+            reason = await checkin.records.ready()
+            if reason:
+                ctx.logger.warning(f"Check-ins: OFF, {reason}")
+            else:
+                ctx.logger.info("Check-ins: ready")
         if service.store is None:
             ctx.logger.warning("Caregiver storage: OFF (SPACETIME_DB_NAME/SPACETIME_TOKEN not set). All changes are refused.")
         else:

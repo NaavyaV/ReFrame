@@ -81,8 +81,8 @@ AGENTS: dict[str, Spec] = {
         8040,
         "orchestrator",
         "ORCHESTRATOR_REPL",
-        "Helps older adults shop online: tell it what you need and your budget, and it returns one "
-        "product with its price, link and why it fits. It never buys anything for you.",
+        "Helps older adults shop online and pay bills: send a bill's web address and it replies with "
+        "a Stripe test payment link for the amount due. It never buys anything for you.",
     ),
     "technical_helper": Spec(
         "technical_helper",
@@ -92,8 +92,8 @@ AGENTS: dict[str, Spec] = {
         8010,
         "technical_helper",
         "TECHNICAL_HELPER_REPL",
-        "Checks real product listings against a shopper's budget and needs, retries a few times if "
-        "nothing fits, and picks one with reasons. Also explains device and website problems step by step.",
+        "Checks real product listings against a shopper's needs, and checks each bill page the scraper "
+        "reads for the amount due, naming the next page to read until it's found.",
     ),
     "scraper": Spec(
         "scraper",
@@ -103,8 +103,8 @@ AGENTS: dict[str, Spec] = {
         8030,
         "scraper",
         "SCRAPER_REPL",
-        "Runs an Apify Actor on an approved shopping site and returns up to three real product "
-        "listings with prices, brands, links and where each fact came from. Facts only, no verdicts.",
+        "Reads product listings and public bill pages, works page by page with the technical helper "
+        "until the amount due is found, and reports it to the orchestrator.",
         avatar_url="https://storage.googleapis.com/agentverse-prod-assets/agent-avatars-pub/706244553.jpg",
     ),
     "caregiver": Spec(
@@ -115,8 +115,8 @@ AGENTS: dict[str, Spec] = {
         8020,
         "caretaker",
         "CARETAKER_REPL",
-        "Lets a caregiver the person has approved adjust a few response settings, such as simpler "
-        "wording or larger text hints. Every change is logged and the person can undo it.",
+        "Tells a family member how someone is doing after a security question and keeps their notes "
+        "for next time. Also lets an approved caregiver adjust a few response settings.",
     ),
 }
 

@@ -17,7 +17,11 @@ from shared.models import (
     PreferenceQuery,
     PreferenceSnapshot,
     ProductSearchTask,
+    PagePopup,
     RecommendationResponse,
+    SiteResult,
+    SiteStep,
+    SiteTask,
     TaskAck,
     TechHelpTask,
     now_iso,
@@ -209,3 +213,85 @@ async def test_show_another_excludes_what_was_shown():
     [next_task] = sends(again, ProductSearchTask)
     assert next_task.message.hard_constraints.exclude_urls == ["https://www.amazon.com/dp/B0TEST0001"]
     assert next_task.message.task_id != task.task_id
+
+
+SCRAPER = "agent1qscraper"
+
+
+def bill_orchestrator(charged: list):
+    async def link(amount, currency, name):
+        charged.append((amount, currency))
+        return "https://buy.stripe.com/test_abc123"
+
+    return Orchestrator(own_address=ME, technical_helper=HELPER, caregiver=CARE, scraper=SCRAPER, translate=same,
+                        payment_link=link)
+
+
+def demo_result(task_id: str) -> SiteResult:
+    return SiteResult(
+        task_id=task_id, sent_at=now_iso(), status="found", amount=84.12, currency="USD",
+        source_url="https://reframe-demo.pages.dev/pay", pages_read=3, pay_page=True, pay_button="Submit payment",
+        pay_fields=["Payment amount", "Card number", "Expiration (MM/YY)", "Security code"],
+        steps=[
+            SiteStep(page="My Account Overview", click="Billing & Payment Options",
+                     where="the left column, under “Quick links”"),
+            SiteStep(page="Account Center", click="Make a one-time payment", where="the middle of the page",
+                     popup=PagePopup(title="How are we doing?", dismiss="No thanks")),
+            SiteStep(page="One-Time Payment"),
+        ],
+    )
+
+
+async def test_directions_first_then_a_stripe_link_when_stuck():
+    charged = []
+    orch = bill_orchestrator(charged)
+    actions = await orch.on_text(USER, "Tell me how to pay my electricity bill: https://reframe-demo.pages.dev/")
+    [sent] = sends(actions, SiteTask)
+    assert sent.to == SCRAPER and sends(actions, TechHelpTask) == []
+    assert sent.message.url == "https://reframe-demo.pages.dev/" and sent.message.reply_to == ME
+    task_id = sent.message.task_id
+
+    assert await orch.on_site_result("agent1qimpostor", demo_result(task_id)) == []
+    [steps] = says(await orch.on_site_result(SCRAPER, demo_result(task_id)))
+    assert "left column, under “Quick links”" in steps and "“Billing & Payment Options”" in steps
+    assert "click “No thanks”" in steps and "“Make a one-time payment”" in steps and "“Submit payment”" in steps
+    assert "stripe.com" not in steps and charged == []
+
+    [stuck] = says(await orch.on_text(USER, "I can't seem to do it!"))
+    assert stuck.startswith("No worries!") and "$84.12" in stuck and "https://buy.stripe.com/test_abc123" in stuck
+    assert charged == [(84.12, "USD")]
+    [again] = says(await orch.on_text(USER, "just give me the link"))
+    assert "https://buy.stripe.com/test_abc123" in again and charged == [(84.12, "USD")]  # same link, not a new one
+    [directions] = says(await orch.on_text(USER, "How do I make the payment from the site itself?"))
+    assert "“Make a one-time payment”" in directions
+
+
+async def test_asking_for_the_link_up_front_skips_the_directions():
+    orch = bill_orchestrator([])
+    actions = await orch.on_text(USER, "Can you give me the payment link for my bill at https://reframe-demo.pages.dev/")
+    [sent] = sends(actions, SiteTask)
+    [text] = says(await orch.on_site_result(SCRAPER, demo_result(sent.message.task_id)))
+    assert "https://buy.stripe.com/test_abc123" in text
+
+
+async def test_bill_follow_ups_never_become_a_shopping_search():
+    orch = bill_orchestrator([])
+    first = await orch.on_text(USER, "how do I go about paying for my bill here: https://reframe-demo.pages.dev/")
+    [sent] = sends(first, SiteTask)
+    await orch.on_site_result(SCRAPER, demo_result(sent.message.task_id))
+    again = await orch.on_text(USER, "Can you give me the link to buy it?")
+    assert sends(again, ProductSearchTask) == [] and "https://buy.stripe.com/test_abc123" in says(again)[0]
+
+
+async def test_pronouns_and_insults_are_not_products():
+    assert parse("Can you give me the link to buy it?").category == ""
+    assert parse("buy what are you stupid").category == ""
+
+
+async def test_bill_without_a_site_asks_for_one_then_delegates():
+    orch = bill_orchestrator([])
+    asked = await orch.on_text(USER, "I need to pay my electric bill")
+    assert sends(asked, SiteTask) == [] and "web address" in says(asked)[0]
+    given = await orch.on_text(USER, "https://billing.example.com/account")
+    [sent] = sends(given, SiteTask)
+    assert sent.message.url == "https://billing.example.com/account"

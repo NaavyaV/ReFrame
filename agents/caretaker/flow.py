@@ -49,13 +49,9 @@ CODE = re.compile(r"\b([A-HJ-NP-Z2-9]{4})-?([A-HJ-NP-Z2-9]{4})\b")
 USER_REF = re.compile(r"\bhmh-u-[0-9a-f]{12}\b")
 
 HELP = (
-    "I let a caregiver adjust a few things about how Hold My Hand talks with the person they help: simpler "
-    "wording, shorter explanations, larger text, preferred language, checking before bigger steps, and pointing "
-    "out clear product features. I can't buy anything or change what gets recommended.\n\n"
-    "- If the person gave you a code, send it to me (for example ABCD-EFGH).\n"
-    "- Then say what to change, for example \"turn on simpler wording\" or \"set language to Spanish\".\n"
-    "- Say \"show settings\" to see them, or \"undo shorter explanations\" to undo one.\n"
-    "The person sees every change and can undo it."
+    "- \"How is <name> doing?\"\n"
+    "- A code from Hold My Hand (ABCD-EFGH), then \"turn on simpler wording\"\n"
+    "- \"Show settings\""
 )
 
 

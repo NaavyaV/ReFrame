@@ -34,6 +34,15 @@ const patient = table(
   }
 );
 
+// Public for testing. The caretaker checks answers against this hash, not the patient row.
+const patientSecret = table(
+  { name: 'patient_secret', public: true },
+  {
+    patientId: t.string().primaryKey(),
+    answerHash: t.string(),
+  }
+);
+
 const caretakerNote = table(
   { name: 'caretaker_note', public: true },
   {
@@ -159,6 +168,7 @@ const spacetimedb = schema({
   admin,
   appUser,
   patient,
+  patientSecret,
   caretakerNote,
   agentRun,
   agentEvent,
@@ -258,6 +268,19 @@ export const seedPatient = spacetimedb.reducer(
       medications: clip(medications, 500),
       securityQuestion: clip(securityQuestion, 300),
     });
+  }
+);
+
+export const setPatientSecurity = spacetimedb.reducer(
+  { patientId: t.string(), securityQuestion: t.string(), answerHash: t.string() },
+  (ctx, { patientId, securityQuestion, answerHash }) => {
+    requireAdmin(ctx);
+    const row = ctx.db.patient.patientId.find(patientId);
+    if (!row) throw new SenderError('not_found');
+    ctx.db.patient.patientId.update({ ...row, securityQuestion: clip(securityQuestion, 300) });
+    const secret = { patientId, answerHash: clip(answerHash, 64) };
+    if (ctx.db.patientSecret.patientId.find(patientId)) ctx.db.patientSecret.patientId.update(secret);
+    else ctx.db.patientSecret.insert(secret);
   }
 );
 

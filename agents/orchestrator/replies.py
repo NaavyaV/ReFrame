@@ -10,7 +10,7 @@ from __future__ import annotations
 from shared import llm
 from shared.features import label
 from shared.format import money
-from shared.models import APPROVED_SITES, ProductSearchTask, RecommendationResponse
+from shared.models import APPROVED_SITES, ProductSearchTask, RecommendationResponse, SiteResult, SiteStep
 from shared.preferences import LANGUAGE_NAMES
 
 
@@ -19,6 +19,7 @@ HELP = (
     "For shopping, tell me what you need and your budget, for example: \"Find a lightweight vacuum that's easy to "
     "use, under $100.\" I'll look at real listings on {site} and suggest one, with its price and link. "
     "I never buy anything; you decide.\n\n"
+    "For a bill, send me the website and I'll walk you through paying it, or send you a link to pay.\n\n"
     "Say \"start over\" at any time to begin again."
 )
 
@@ -113,6 +114,51 @@ def failed(code: str) -> str:
 def other_shop(name: str) -> str:
     sites = " or ".join(APPROVED_SITES.values())
     return f"I can't search {name} yet, only {sites}. I'll look there instead; tell me if you'd rather not."
+
+
+def _click(step: SiteStep) -> str:
+    where = step.where if step.where and step.where != "the page" else ""
+    if where.startswith("the page, "):
+        where = where.removeprefix("the page, ")
+    if not where:
+        return f"click “{step.click}”"
+    return f"look in {where}{',' if 'under' in where else ''} and click “{step.click}”"
+
+
+def bill_steps(result: SiteResult) -> str:
+    """Click-by-click directions to the payment page, from what the scraper actually saw."""
+    due = f" {money(result.amount, result.currency)}" if result.amount is not None else ""
+    lines = [f"Here's how to pay your{due} bill on the site:", ""]
+    for number, step in enumerate(result.steps, start=1):
+        parts = []
+        if step.popup:
+            parts.append(f"If a “{step.popup.title}” pop-up appears, click “{step.popup.dismiss}” to close it.")
+        if step.click:
+            action = _click(step)
+            parts.append(f"{'Then ' + action if parts else action[0].upper() + action[1:]}.")
+            lines.append(f"{number}. On the “{step.page}” page: {' '.join(parts)}")
+            continue
+        if result.pay_page:
+            fields = [name for name in result.pay_fields if "amount" not in name.lower()]
+            if result.amount is not None and any("amount" in name.lower() for name in result.pay_fields):
+                parts.append(f"Check that the payment amount says {money(result.amount, result.currency)}.")
+            if fields:
+                quoted = [f"“{name}”" for name in fields]
+                listed = quoted[0] if len(quoted) == 1 else ", ".join(quoted[:-1]) + " and " + quoted[-1]
+                parts.append(f"Fill in {listed}.")
+            parts.append(f"Then click “{result.pay_button}”.")
+        else:
+            parts.append("Look for a button to pay. It may ask you to sign in first.")
+        lines.append(f"{number}. On the “{step.page}” page: {' '.join(parts)}")
+    lines += ["", "If you get stuck, just tell me and I'll send you a link to pay instead."]
+    return "\n".join(lines)
+
+
+def bill_link(result: SiteResult, url: str, *, stuck: bool) -> str:
+    due = money(result.amount, result.currency)
+    if stuck:
+        return f"No worries! I found your payment. You can pay your {due} bill here:\n{url}"
+    return f"Here's a link to pay your {due} bill:\n{url}"
 
 
 def caregiver_notice(changes: list[str]) -> str:

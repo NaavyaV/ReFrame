@@ -6,6 +6,9 @@ Orchestrator -> technical helper (hmh-shopping):
 Technical helper -> scraper (hmh-scrape):
     ScrapeRequest -> TaskAck, later ScrapeResponse
     PageRequest   -> TaskAck, later PageResponse
+Website tasks (hmh-site):
+    orchestrator -> scraper:      SiteTask -> TaskAck, later SiteResult
+    scraper -> technical helper:  PageCheck -> PageVerdict, repeated until the helper accepts a page
 Orchestrator <-> caregiver (hmh-caregiver):
     CaregiverInviteRequest -> CaregiverInviteResult
     PreferenceQuery        -> PreferenceSnapshot
@@ -27,6 +30,8 @@ from uagents import Model
 
 SHOPPING_PROTOCOL = ("hmh-shopping", "1.0.0")
 SCRAPE_PROTOCOL = ("hmh-scrape", "1.0.0")
+SITE_PROTOCOL = ("hmh-site", "1.0.0")
+BILL_AMOUNT = "bill_amount"
 CAREGIVER_PROTOCOL = ("hmh-caregiver", "1.0.0")
 
 # Shopping sites the scraper has an Apify Actor for (see scraper/actors.py).
@@ -236,7 +241,13 @@ class PageRequest(Model):
 
 class PageLink(Model):
     label: str
-    url: str
+    url: str = ""  # empty for a button
+    where: str = ""  # e.g. "the left column, under “Quick links”"
+
+
+class PagePopup(Model):
+    title: str
+    dismiss: str = ""  # the button that closes it, e.g. "No thanks"
 
 
 class PageResponse(Model):
@@ -250,8 +261,74 @@ class PageResponse(Model):
     title: str = ""
     headings: list[str] = []
     links: list[PageLink] = []
+    buttons: list[PageLink] = []
+    fields: list[str] = []  # form field labels
+    popups: list[PagePopup] = []
     text: str = ""
     collected_at: str = ""
+    error: ErrorInfo | None = None
+
+
+# Website tasks
+
+
+class SiteTask(Model):
+    task_id: str
+    sender_role: str = ORCHESTRATOR
+    recipient_role: str = SCRAPER
+    sent_at: str
+    url: str
+    goal: str = BILL_AMOUNT
+    reply_to: str
+
+
+class PageCheck(Model):
+    task_id: str
+    request_id: str
+    sender_role: str = SCRAPER
+    recipient_role: str = TECHNICAL_HELPER
+    sent_at: str
+    goal: str
+    origin: str  # the address the person gave; next pages must be on the same site
+    page: PageResponse
+
+
+class PageVerdict(Model):
+    task_id: str
+    request_id: str
+    sender_role: str = TECHNICAL_HELPER
+    recipient_role: str = SCRAPER
+    sent_at: str
+    status: str  # "found" (this is the payment page), "next" or "none"
+    amount: float | None = None  # the amount due, if this page shows it
+    currency: str = ""
+    evidence: str = ""  # the page text the amount was read from
+    next_links: list[PageLink] = []  # best first
+    pay_button: str = ""  # on the payment page, e.g. "Submit payment"
+
+
+class SiteStep(Model):
+    page: str  # page name, e.g. "Account Center"
+    click: str = ""  # link to click; empty on the payment page itself
+    where: str = ""
+    popup: PagePopup | None = None
+
+
+class SiteResult(Model):
+    task_id: str
+    sender_role: str = SCRAPER
+    recipient_role: str = ORCHESTRATOR
+    sent_at: str
+    status: str  # "found", "not_found" or FAILED
+    amount: float | None = None
+    currency: str = ""
+    evidence: str = ""
+    source_url: str = ""
+    pages_read: int = 0
+    steps: list[SiteStep] = []  # how to reach the payment page by clicking
+    pay_page: bool = False  # the last step is the payment form
+    pay_fields: list[str] = []
+    pay_button: str = ""
     error: ErrorInfo | None = None
 
 

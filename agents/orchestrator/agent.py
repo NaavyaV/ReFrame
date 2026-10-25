@@ -38,16 +38,19 @@ from shared.agents import (  # noqa: E402
 from shared.models import (  # noqa: E402
     CAREGIVER_PROTOCOL,
     SHOPPING_PROTOCOL,
+    SITE_PROTOCOL,
     CaregiverInviteResult,
     CaregiverPreferenceResult,
     PreferenceSnapshot,
     RecommendationResponse,
+    SiteResult,
     TaskAck,
     TechHelpResponse,
 )
 from shared.security import NonceCache, verify_bridge  # noqa: E402
 from uagents import Agent, Context, Model, Protocol  # noqa: E402
 
+from orchestrator import payments  # noqa: E402
 from orchestrator.flow import Action, Orchestrator, Say  # noqa: E402
 
 BRIDGE_PREFIX = "bridge:"
@@ -82,8 +85,9 @@ class BridgeReply(Model):
 
 def create(flow: Orchestrator | None = None, **agent_options) -> tuple[Agent, Terminal]:
     agent = make_agent("orchestrator", **agent_options)
-    helper, caregiver = address("technical_helper"), address("caregiver")
-    flow = flow or Orchestrator(own_address=agent.address, technical_helper=helper, caregiver=caregiver)
+    helper, caregiver, scraper = address("technical_helper"), address("caregiver"), address("scraper")
+    flow = flow or Orchestrator(own_address=agent.address, technical_helper=helper, caregiver=caregiver,
+                                scraper=scraper)
     outbox: dict[str, deque[str]] = {}
     nonces = NonceCache()
 
@@ -103,7 +107,7 @@ def create(flow: Orchestrator | None = None, **agent_options) -> tuple[Agent, Te
 
     @shopping.on_message(TaskAck)
     async def on_ack(ctx: Context, sender: str, msg: TaskAck):
-        ctx.logger.info(f"[{msg.task_id}] helper {msg.status}" + (f": {msg.error.code}" if msg.error else ""))
+        ctx.logger.info(f"[{msg.task_id}] {msg.sender_role} {msg.status}" + (f": {msg.error.code}" if msg.error else ""))
         await act(ctx, await flow.on_ack(sender, msg))
 
     @shopping.on_message(RecommendationResponse)
@@ -117,6 +121,16 @@ def create(flow: Orchestrator | None = None, **agent_options) -> tuple[Agent, Te
         await act(ctx, await flow.on_tech_help(sender, msg))
 
     agent.include(shopping)
+
+    # Website results from the scraper.
+    site = Protocol(name=SITE_PROTOCOL[0], version=SITE_PROTOCOL[1])
+
+    @site.on_message(SiteResult)
+    async def on_site_result(ctx: Context, sender: str, msg: SiteResult):
+        ctx.logger.info(f"[{msg.task_id}] scraper: {msg.status} after {msg.pages_read} page(s)")
+        await act(ctx, await flow.on_site_result(sender, msg))
+
+    agent.include(site)
 
     # Answers and notices from the caregiver agent.
     care = Protocol(name=CAREGIVER_PROTOCOL[0], version=CAREGIVER_PROTOCOL[1])
@@ -184,7 +198,9 @@ def create(flow: Orchestrator | None = None, **agent_options) -> tuple[Agent, Te
     @agent.on_event("startup")
     async def startup(ctx: Context):
         ctx.logger.info(f"Technical helper: {helper}")
+        ctx.logger.info(f"Scraper: {scraper}")
         ctx.logger.info(f"Caregiver: {caregiver}")
+        ctx.logger.info(f"Stripe: {payments.status()}")
         ctx.logger.info(await flow.task_log.check())
         ctx.logger.info("Groq: " + ("set" if llm.configured() else "MISSING: replies use plain rules only"))
         ctx.logger.info("Bridge: " + ("on" if os.getenv("BRIDGE_SHARED_SECRET", "").strip()
