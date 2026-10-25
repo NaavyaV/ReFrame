@@ -22,6 +22,7 @@ Simple visual requests (bigger/smaller text, dark mode, high contrast, hide imag
 | `backend/` | FastAPI server: auth, `/reframe`, Groq calls |
 | `spacetime/` | SpacetimeDB module storing user accounts |
 | `demo-site/` | Static utility-company site for testing |
+| `agents/` | Fetch.ai uAgents: technical helper, scraper, caretaker |
 | `docs/BUILD_PLAN.md` | Phased build plan |
 
 ## Requirements
@@ -83,6 +84,26 @@ python3 -m http.server 5173
 ```
 
 Open <http://localhost:5173>.
+
+### 5. Agents (optional)
+
+Three local uAgents with the chat protocol, Groq, no mailbox and registration off. Each prints its address and opens a chat in its terminal.
+
+```bash
+cd agents
+uv sync
+cd technical_helper && uv run --project .. python agent.py   # port 8010
+cd scraper && uv run --project .. python agent.py            # port 8030
+cd caretaker && uv run --project .. python agent.py          # port 8020
+```
+
+| Agent | What it does | Settings |
+| --- | --- | --- |
+| Technical helper | Walks someone through a device or website problem one step at a time; warns about scams | `TECHNICAL_HELPER_SEED`, `TECHNICAL_HELPER_PORT` |
+| Scraper | Reads a public page (robots.txt respected) and says where to click for a goal | `SCRAPER_SEED`, `SCRAPER_PORT` |
+| Caretaker | Opens patient records after a security question and saves notes, in SpacetimeDB | `CAREGIVER_SEED`, `CARETAKER_PORT`, `SPACETIME_*` |
+
+Set `<NAME>_REPL=0` to turn off the terminal chat. The caretaker needs the `patient` and `caretaker_note` tables, so publish the current module first.
 
 ## Install the extension
 
