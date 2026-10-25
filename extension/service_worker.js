@@ -434,6 +434,17 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   for (const tab of tabs) broadcast(tab.id);
 });
 
+async function caretakerNotes() {
+  const auth = await getAuth();
+  if (!auth?.token) return { notes: [] };
+  try {
+    const { notes } = await apiFetch('/caretaker/notes', { token: auth.token });
+    return { notes: Array.isArray(notes) ? notes : [] };
+  } catch {
+    return { notes: [] };
+  }
+}
+
 // ---------- toolbar icon and shortcut ----------
 
 async function toggleWidget(tab) {
@@ -588,6 +599,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     case 'rf:set-open':
       chrome.storage.session.set({ [keys(tabId).open]: Boolean(msg.open) }).then(() => sendResponse({ ok: true }));
+      return true;
+    case 'rf:notes':
+      caretakerNotes().then(sendResponse);
       return true;
     case 'rf:page-changed':
       schedulePageChange(tabId);

@@ -69,7 +69,32 @@ const agentAlert = table(
   }
 );
 
-const spacetimedb = schema({ admin, appUser, agentRun, agentEvent, agentAlert });
+// Caretaker records. Public so a caretaker deployed under any identity can read them.
+const patient = table(
+  { name: 'patient', public: true },
+  {
+    patientId: t.string().primaryKey(),
+    fullName: t.string().index('btree'),
+    dateOfBirth: t.string(),
+    city: t.string(),
+    conditions: t.string(),
+    medications: t.string(),
+    securityQuestion: t.string(),
+  }
+);
+
+const caretakerNote = table(
+  { name: 'caretaker_note', public: true },
+  {
+    noteId: t.u64().primaryKey().autoInc(),
+    patientId: t.string().index('btree'),
+    author: t.string(),
+    body: t.string(),
+    createdAt: t.timestamp(),
+  }
+);
+
+const spacetimedb = schema({ admin, appUser, agentRun, agentEvent, agentAlert, patient, caretakerNote });
 export default spacetimedb;
 
 type Ctx = ReducerCtx<InferSchema<typeof spacetimedb>>;
@@ -258,5 +283,46 @@ export const deleteUser = spacetimedb.reducer(
   (ctx, { userId }) => {
     requireAdmin(ctx);
     if (!ctx.db.appUser.userId.delete(userId)) throw new SenderError('not_found');
+  }
+);
+
+export const seedPatient = spacetimedb.reducer(
+  {
+    patientId: t.string(),
+    fullName: t.string(),
+    dateOfBirth: t.string(),
+    city: t.string(),
+    conditions: t.string(),
+    medications: t.string(),
+    securityQuestion: t.string(),
+  },
+  (ctx, { patientId, fullName, dateOfBirth, city, conditions, medications, securityQuestion }) => {
+    requireAdmin(ctx);
+    if (ctx.db.patient.patientId.find(patientId)) return;
+    ctx.db.patient.insert({
+      patientId,
+      fullName: clip(fullName, 120),
+      dateOfBirth: clip(dateOfBirth, 40),
+      city: clip(city, 80),
+      conditions: clip(conditions, 500),
+      medications: clip(medications, 500),
+      securityQuestion: clip(securityQuestion, 300),
+    });
+  }
+);
+
+export const addCaretakerNote = spacetimedb.reducer(
+  { patientId: t.string(), author: t.string(), body: t.string() },
+  (ctx, { patientId, author, body }) => {
+    if (!ctx.db.patient.patientId.find(patientId)) throw new SenderError('not_found');
+    const text = body.trim();
+    if (!text) throw new SenderError('empty');
+    ctx.db.caretakerNote.insert({
+      noteId: 0n,
+      patientId,
+      author: clip(author, 80),
+      body: clip(text, 2000),
+      createdAt: ctx.timestamp,
+    });
   }
 );

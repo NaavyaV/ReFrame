@@ -66,6 +66,16 @@ async def clear_tracker(request: Request, user: PublicUser = Depends(current_use
     return {"ok": True}
 
 
+@app.get("/caretaker/notes")
+async def caretaker_notes(request: Request, user: PublicUser = Depends(current_user)) -> dict:
+    try:
+        notes = await request.app.state.stdb.caretaker_notes(user.display_name)
+    except SpacetimeError as err:
+        log.warning("caretaker notes failed: %s", err)
+        notes = []
+    return {"notes": notes}
+
+
 @app.post("/reframe", response_model=ReframeResponse, response_model_exclude_none=True)
 async def reframe_page(
     body: ReframeRequest, request: Request, user: PublicUser = Depends(current_user)

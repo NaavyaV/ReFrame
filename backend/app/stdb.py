@@ -47,3 +47,17 @@ class SpacetimeClient:
     async def find_user_by_id(self, user_id: str) -> dict[str, Any] | None:
         rows = await self.sql(f"SELECT * FROM app_user WHERE user_id = {_sql_literal(user_id)}")
         return rows[0] if rows else None
+
+    async def caretaker_notes(self, full_name: str) -> list[dict[str, Any]]:
+        """Notes for the patient whose name matches, oldest first."""
+        wanted = " ".join(full_name.split()).casefold()
+        patients = await self.sql("SELECT * FROM patient")
+        match = next((p for p in patients if " ".join(p["full_name"].split()).casefold() == wanted), None)
+        if match is None:
+            return []
+        rows = await self.sql(f"SELECT * FROM caretaker_note WHERE patient_id = {_sql_literal(match['patient_id'])}")
+        rows.sort(key=lambda r: r["note_id"])
+        return [
+            {"body": r["body"], "author": r["author"], "created_at": r["created_at"][0] // 1000}
+            for r in rows
+        ]

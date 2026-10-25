@@ -1,4 +1,4 @@
-"""Live agent tracker: writes each run's progress to SpacetimeDB under the ReFrame user's id.
+"""Live agent tracker: writes each run's progress on the demo site to SpacetimeDB under the ReFrame user's id.
 
 Writes are queued in order and run in the background, so a slow or unreachable database never
 delays the page. Only labels and counts are sent, never form field values.
@@ -11,6 +11,7 @@ import uuid
 from urllib.parse import urlsplit
 
 from .auth import PublicUser
+from .demo import is_demo
 from .schemas import ReframeRequest, ReframeResponse, SnapElement
 from .stdb import SpacetimeClient
 
@@ -34,8 +35,11 @@ class Tracker:
         self._chain: asyncio.Task | None = None
         self.run_id = uuid.uuid4().hex[:16]
         self._created = time.monotonic()
+        self._enabled = is_demo(req.snapshot.url)
 
     def _queue(self, reducer: str, *args) -> None:
+        if not self._enabled:
+            return
         previous = self._chain
 
         async def send() -> None:

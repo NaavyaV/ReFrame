@@ -69,15 +69,22 @@ function setLink(state: 'live' | 'connecting' | 'down', text: string) {
   el.link.querySelector('span')!.textContent = text;
 }
 
+const DEMO_HOSTS = ['reframe-demo.pages.dev', '127.0.0.1:5173', 'localhost:5173'];
+const isDemoSite = (host: string) =>
+  DEMO_HOSTS.includes(host.toLowerCase()) || host.toLowerCase().endsWith('.reframe-demo.pages.dev');
+
 function data() {
   const db = conn!.db;
-  const runs = [...db.agentRun.iter()].sort((a, b) => ms(b.startedAt) - ms(a.startedAt));
+  const runs = [...db.agentRun.iter()]
+    .filter((r) => isDemoSite(r.site))
+    .sort((a, b) => ms(b.startedAt) - ms(a.startedAt));
   const users = new Map<string, string>();
   for (const r of runs) if (!users.has(r.userId)) users.set(r.userId, r.userName);
   const mine = <T extends { userId: string }>(rows: T[]) => (userFilter ? rows.filter((r) => r.userId === userFilter) : rows);
   const runById = new Map(runs.map((r) => [r.runId, r]));
-  const events = mine([...db.agentEvent.iter()]).sort((a, b) => ms(b.at) - ms(a.at) || Number(b.eventId - a.eventId));
-  const alerts = mine([...db.agentAlert.iter()]).sort((a, b) => ms(b.at) - ms(a.at));
+  const onDemo = <T extends { runId: string }>(rows: T[]) => rows.filter((r) => runById.has(r.runId));
+  const events = mine(onDemo([...db.agentEvent.iter()])).sort((a, b) => ms(b.at) - ms(a.at) || Number(b.eventId - a.eventId));
+  const alerts = mine(onDemo([...db.agentAlert.iter()])).sort((a, b) => ms(b.at) - ms(a.at));
   return { runs: mine(runs), users, runById, events, alerts };
 }
 

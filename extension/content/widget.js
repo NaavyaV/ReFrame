@@ -69,6 +69,13 @@
     .msg.user{align-self:flex-end;background:#4f74ff;color:#fff;border-bottom-right-radius:5px}
     .msg.assistant{align-self:flex-start;background:rgba(255,255,255,.09);border-bottom-left-radius:5px}
     .msg.error{align-self:flex-start;background:rgba(255,92,92,.16);color:#ffb4b4;border-bottom-left-radius:5px}
+    .notes{flex-shrink:0;max-height:38%;overflow-y:auto;margin:12px 14px 0;padding:10px 13px;border-radius:14px;
+      background:rgba(255,200,90,.1);border:1px solid rgba(255,200,90,.28);display:flex;flex-direction:column;gap:8px;
+      overscroll-behavior:contain}
+    .notes h4{flex-shrink:0;margin:0;font-size:13px;font-weight:650;color:#ffd58a}
+    .note{flex-shrink:0;margin:0;font-size:15px;white-space:pre-wrap;word-wrap:break-word}
+    .note .meta{display:flex;align-items:baseline;gap:8px;font-size:12px;color:rgba(244,246,251,.55)}
+    .note .meta b{font-weight:650;color:#ffd58a}
     .dots{align-self:flex-start;display:flex;gap:4px;padding:12px 14px;background:rgba(255,255,255,.09);border-radius:16px}
     .dots i{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.7);animation:blink 1s infinite}
     .dots i:nth-child(2){animation-delay:.15s}.dots i:nth-child(3){animation-delay:.3s}
@@ -149,6 +156,7 @@
           <button class="primary auth-submit" type="submit">Sign in</button>
           <button class="link auth-toggle" type="button">Create account</button>
         </form>
+        <section class="notes" aria-label="Caretaker notes" hidden></section>
         <div class="msgs" aria-live="polite" hidden></div>
         <form class="composer" hidden>
           <textarea rows="1" maxlength="1000" placeholder="What do you want to do?" aria-label="Message"></textarea>
@@ -171,11 +179,13 @@
     menu: $('.menu'), who: $('.who'), signout: $('.signout'), hideOrb: $('.hide-orb'),
     auth: $('.auth'), authTitle: $('.auth-title'), nameField: $('.name-field'), err: $('.err'),
     authSubmit: $('.auth-submit'), authToggle: $('.auth-toggle'),
-    msgs: $('.msgs'), composer: $('.composer'), input: $('textarea'), send: $('.send'),
+    notes: $('.notes'), msgs: $('.msgs'), composer: $('.composer'), input: $('textarea'), send: $('.send'),
     confirm: $('.confirm'), confirmTitle: $('.confirm h3'), yes: $('.yes'), no: $('.no'),
   };
 
   let view = { open: false, chat: [], busy: false, user: null };
+  let notes = [];
+  let notesFor = '';
   let orbHidden = false;
   let authMode = 'signin';
   let working = false;
@@ -318,6 +328,44 @@
     el.auth.password.autocomplete = register ? 'new-password' : 'current-password';
   }
 
+  function loadNotes() {
+    const userId = view.user?.user_id || '';
+    notesFor = userId;
+    if (!userId) {
+      notes = [];
+      return;
+    }
+    send('rf:notes').then((res) => {
+      if (notesFor !== userId) return;
+      notes = Array.isArray(res?.notes) ? res.notes : [];
+      render();
+    });
+  }
+
+  let notesShown = '';
+  function renderNotes() {
+    const key = JSON.stringify(notes);
+    if (key === notesShown) return;
+    notesShown = key;
+    const title = document.createElement('h4');
+    title.textContent = 'Caretaker notes';
+    const items = notes.map((n) => {
+      const p = document.createElement('p');
+      p.className = 'note';
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      const who = document.createElement('b');
+      who.textContent = String(n.author || 'Caretaker');
+      const when = document.createElement('time');
+      const date = new Date(Number(n.created_at) || 0);
+      when.textContent = date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      meta.append(who, when);
+      p.append(meta, String(n.body || ''));
+      return p;
+    });
+    el.notes.replaceChildren(title, ...items);
+  }
+
   function renderMessages() {
     const nodes = view.chat.map((m) => {
       const div = document.createElement('div');
@@ -355,6 +403,8 @@
     el.site.textContent = location.hostname;
     el.auth.hidden = signedIn;
     el.msgs.hidden = !signedIn;
+    el.notes.hidden = !signedIn || !notes.length;
+    if (signedIn) renderNotes();
     el.composer.hidden = !signedIn;
     el.restore.hidden = !signedIn;
     el.more.hidden = !signedIn;
@@ -367,6 +417,7 @@
 
   function setOpen(open) {
     view.open = open;
+    if (open) loadNotes();
     render();
     send('rf:set-open', { open });
     if (open) (view.user ? el.input : el.auth.email).focus();
@@ -474,6 +525,7 @@
   RF.ui = {
     setState(next) {
       view = { ...view, ...next };
+      if ((view.user?.user_id || '') !== notesFor && (view.open || !view.user)) loadNotes();
       render();
     },
     setWorking(on) {
