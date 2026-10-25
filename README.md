@@ -158,7 +158,7 @@ On the demo site the steps, alerts and timings are scripted.
 | AI requests per user | 6/min, 60/hour, one at a time | `USER_REFRAME_PER_MINUTE`, `USER_REFRAME_PER_HOUR` |
 | Login/register per IP | 10/min | `AUTH_PER_MINUTE` |
 
-The Groq values match the free tier for `openai/gpt-oss-120b` and `openai/gpt-oss-20b`. Each model has its own budget; when `GROQ_MODEL` runs out, requests go to `GROQ_FAST_MODEL`. Local quick commands and cached pages don't count.
+The Groq values match the free tier for `openai/gpt-oss-120b` and `openai/gpt-oss-20b`. Each model has its own budget; when `GROQ_MODEL` runs out, requests go to `GROQ_FAST_MODEL`. Local quick commands, cached pages and the demo site don't count. Groq usage is saved to `backend/.groq-usage.json`, so restarts keep the day's count. Automatic rebuilds skip the model when the page hasn't really changed.
 
 ## Tests
 
