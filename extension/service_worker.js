@@ -101,6 +101,25 @@ async function cacheGet(key) {
   return cache[key]?.res || null;
 }
 
+// The last model answer per tab. Busy sites (ads, carousels) mutate after every click; when the page
+// is still the same one, an automatic rebuild reuses this instead of asking the model again.
+const lastAnswer = new Map();
+const SAME_PAGE_OVERLAP = 0.8;
+
+function controlLabels(snapshot) {
+  return new Set(
+    snapshot.elements.filter((e) => e.kind === 'control').map((e) => `${e.tag}|${e.text || e.label || ''}|${e.href || ''}`)
+  );
+}
+
+function samePage(last, text, snapshot) {
+  if (!last || last.text !== text || last.url !== snapshot.url) return false;
+  const now = controlLabels(snapshot);
+  let shared = 0;
+  for (const label of now) if (last.labels.has(label)) shared++;
+  return shared / Math.max(now.size, last.labels.size, 1) >= SAME_PAGE_OVERLAP;
+}
+
 async function cachePut(key, res) {
   const cache = (await getSession('renderCache')) || {};
   cache[key] = { res, ts: Date.now() };
@@ -266,6 +285,13 @@ async function runReframe(tabId, text, { continuation = false, spoken = false } 
   const { snapshot, applied } = await snapshotTab(tabId);
   const cacheKey = `${text}|${signature(snapshot)}`;
   let res = continuation && !isDemoSite(snapshot.url) ? await cacheGet(cacheKey) : null;
+  if (!res && continuation && !isDemoSite(snapshot.url) && samePage(lastAnswer.get(tabId), text, snapshot)) {
+    if (applied.includes('rebuilt view shown')) {
+      chrome.tabs.sendMessage(tabId, { type: 'rf:pending', on: false }).catch(() => {});
+      return { ok: true, unchanged: true };
+    }
+    res = lastAnswer.get(tabId).res;
+  }
   if (!res) {
     if (continuation) await countAutoRebuild(tabId);
     else if (isDemoSite(snapshot.url)) chrome.tabs.sendMessage(tabId, { type: 'rf:pending', on: true }).catch(() => {});
@@ -274,7 +300,10 @@ async function runReframe(tabId, text, { continuation = false, spoken = false } 
       token: auth.token,
       body: { message: text, snapshot, history: continuation ? [] : history, applied, continuation, spoken },
     });
-    if (res.operations?.length) await cachePut(cacheKey, res);
+    if (res.operations?.length) {
+      await cachePut(cacheKey, res);
+      lastAnswer.set(tabId, { text, url: snapshot.url, labels: controlLabels(snapshot), res });
+    }
   }
   if ((restoreGen.get(tabId) || 0) !== gen) return { ok: false, restored: true };
   // In voice mode the reply is synthesized while the page changes, then spoken.
@@ -419,6 +448,7 @@ async function onRestored(tabId) {
   clearTimeout(debounceTimers.get(tabId));
   pendingRebuild.delete(tabId);
   retriedRebuild.delete(tabId);
+  lastAnswer.delete(tabId);
   await chrome.storage.session.remove([keys(tabId).goal, keys(tabId).chat, keysVoice(tabId)]);
   await stopSpeech(tabId);
   await broadcast(tabId);
@@ -521,6 +551,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   chrome.storage.session.remove([k.chat, k.goal, k.busy, k.open]);
   busyTabs.delete(tabId);
   pendingRebuild.delete(tabId);
+  lastAnswer.delete(tabId);
 });
 
 // ---------- messages from content scripts ----------

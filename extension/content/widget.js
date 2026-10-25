@@ -9,7 +9,7 @@
     [hidden]{display:none!important}
     .dock{position:fixed;top:32px;right:32px;display:flex;flex-direction:column;align-items:flex-end;gap:10px;
       color:#f4f6fb;font-size:15px;line-height:1.45}
-    .orb-row{display:flex;align-items:center;gap:14px}
+    .orb-row{position:relative}
     .orb{width:64px;height:64px;border-radius:50%;border:1.5px solid rgba(143,176,255,.55);cursor:pointer;color:#fff;
       background:radial-gradient(circle at 30% 25%,rgba(111,145,255,.75),rgba(18,22,32,.6) 70%);
       backdrop-filter:blur(14px) saturate(1.4);-webkit-backdrop-filter:blur(14px) saturate(1.4);
@@ -26,11 +26,11 @@
     @keyframes bounce{0%,60%,100%{transform:translateY(0);opacity:.55}30%{transform:translateY(-7px);opacity:1}}
     .orb-wave{display:flex;gap:4px;align-items:center;height:30px}
     .orb-wave i{width:4px;height:6px;border-radius:2px;background:#fff;transition:height .06s linear}
-    .chat-btn{width:40px;height:40px;border-radius:50%;border:1px solid rgba(255,255,255,.22);cursor:pointer;color:#fff;padding:0;
-      background:rgba(18,22,32,.62);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);display:grid;place-items:center;
-      box-shadow:0 6px 18px rgba(0,0,0,.25);opacity:.8}
-    .chat-btn:hover,.chat-btn[aria-expanded="true"]{opacity:1}
-    .chat-btn svg{width:18px;height:18px}
+    .chat-btn{position:absolute;left:-6px;bottom:-4px;z-index:1;width:24px;height:24px;border-radius:50%;padding:0;cursor:pointer;
+      border:1px solid rgba(255,255,255,.18);color:rgba(255,255,255,.85);background:rgba(18,22,32,.7);
+      backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);display:grid;place-items:center;opacity:.45;transition:opacity .2s}
+    .orb-row:hover .chat-btn,.chat-btn:focus-visible,.chat-btn[aria-expanded="true"]{opacity:1}
+    .chat-btn svg{width:13px;height:13px}
     .caption{max-width:min(340px,calc(100vw - 64px));padding:12px 16px;border-radius:16px;font-size:17px;line-height:1.45;
       background:rgba(16,19,28,.86);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
       border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 32px rgba(0,0,0,.3);animation:pop .16s ease-out}

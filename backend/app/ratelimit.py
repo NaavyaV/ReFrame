@@ -1,13 +1,20 @@
 """In-process rate limiting: per-user/per-IP request windows and a shared Groq token budget.
 
-State lives in memory, so limits apply per server process (run a single worker).
+Request windows live in memory, so limits apply per server process (run a single worker).
+Groq usage is also saved to disk so restarts (including --reload) don't forget the daily spend.
 """
 
 import asyncio
+import json
+import logging
 import math
+import os
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
+from pathlib import Path
+
+log = logging.getLogger("reframe")
 
 
 class RateLimited(Exception):
@@ -69,13 +76,34 @@ class GroqBudget:
     After Groq returns a 429 every call fails fast until the retry-after has passed.
     """
 
-    def __init__(self, rpm: int, tpm: int, rpd: int, tpd: int, max_wait: float) -> None:
+    def __init__(
+        self, rpm: int, tpm: int, rpd: int, tpd: int, max_wait: float, store: Path | None = None, name: str = ""
+    ) -> None:
         # (window seconds, max requests, max tokens)
         self._limits = [(60.0, rpm, tpm), (86400.0, rpd, tpd)]
-        self._log: deque[list] = deque()  # [timestamp, tokens]
+        self._log: deque[list] = deque()  # [unix time, tokens]
         self._lock = asyncio.Lock()
         self._cooldown_until = 0.0
         self.max_wait = max_wait
+        self._store = store
+        self._name = name
+        if store:
+            saved = _read_store(store).get(name) or {}
+            now = time.time()
+            self._log.extend([float(ts), int(tok)] for ts, tok in saved.get("log", []) if now - ts < 86400)
+            self._cooldown_until = float(saved.get("cooldown_until", 0))
+
+    def _save(self) -> None:
+        if not self._store:
+            return
+        data = _read_store(self._store)
+        data[self._name] = {"log": list(self._log), "cooldown_until": self._cooldown_until}
+        tmp = self._store.with_suffix(".tmp")
+        try:
+            tmp.write_text(json.dumps(data))
+            os.replace(tmp, self._store)
+        except OSError as err:
+            log.warning("couldn't save Groq usage: %s", err)
 
     def _wait_needed(self, now: float, tokens: int) -> float:
         wait = 0.0
@@ -98,7 +126,7 @@ class GroqBudget:
 
     def wait_for(self, tokens: int) -> float:
         """Seconds until a call of this size fits; infinite if it never will."""
-        now = time.monotonic()
+        now = time.time()
         if now < self._cooldown_until:
             return self._cooldown_until - now
         try:
@@ -108,7 +136,7 @@ class GroqBudget:
 
     async def acquire(self, tokens: int) -> list:
         async with self._lock:
-            now = time.monotonic()
+            now = time.time()
             if now < self._cooldown_until:
                 raise RateLimited(self._cooldown_until - now)
             while self._log and now - self._log[0][0] >= self._limits[-1][0]:
@@ -118,13 +146,23 @@ class GroqBudget:
                 raise RateLimited(wait)
             if wait > 0:
                 await asyncio.sleep(wait)
-            entry = [time.monotonic(), tokens]
+            entry = [time.time(), tokens]
             self._log.append(entry)
+            self._save()
             return entry
 
-    @staticmethod
-    def settle(entry: list, actual_tokens: int) -> None:
+    def settle(self, entry: list, actual_tokens: int) -> None:
         entry[1] = actual_tokens
+        self._save()
 
     def cooldown(self, seconds: float) -> None:
-        self._cooldown_until = max(self._cooldown_until, time.monotonic() + seconds)
+        self._cooldown_until = max(self._cooldown_until, time.time() + seconds)
+        self._save()
+
+
+def _read_store(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}

@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import time
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from groq import AsyncGroq, BadRequestError, RateLimitError
@@ -323,6 +324,7 @@ def _validate_ops(raw_ops: list, snapshot: Snapshot) -> tuple[list, int]:
 MAX_COMPLETION_TOKENS = 1500
 # Typical reply size; the reservation is replaced by real usage once the call returns.
 EXPECTED_OUTPUT_TOKENS = 400
+USAGE_FILE = Path(__file__).resolve().parents[1] / ".groq-usage.json"
 _client: AsyncGroq | None = None
 _budgets: dict[str, GroqBudget] = {}
 
@@ -338,7 +340,9 @@ def _groq_budget(model: str) -> GroqBudget:
     # Groq limits each model separately.
     if model not in _budgets:
         s = get_settings()
-        _budgets[model] = GroqBudget(s.groq_rpm, s.groq_tpm, s.groq_rpd, s.groq_tpd, s.groq_max_wait)
+        _budgets[model] = GroqBudget(
+            s.groq_rpm, s.groq_tpm, s.groq_rpd, s.groq_tpd, s.groq_max_wait, store=USAGE_FILE, name=model
+        )
     return _budgets[model]
 
 

@@ -9,3 +9,4 @@ target/
 .vibehub/
 dist/
 .wrangler/
+.groq-usage.*
