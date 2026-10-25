@@ -1,162 +1,126 @@
-"""Technical helper uAgent.
+"""Hold My Hand Technical Helper uAgent.
 
-Same shape as the other local agents: chat protocol, Groq, no mailbox.
-Registration stays off. Talk in this terminal, or send a chat message to the local endpoint.
-Walks an older or less technical person through a device or website problem, one step at a time.
+Takes ProductSearchTask and TechHelpTask messages from the orchestrator only. For a
+product it asks the scraper for real listings, checks them against the person's
+budget and needs, retries at most twice with tighter searches, and returns one
+product or a clear no_match. It never reads pages itself; the scraper does that.
+
+People can also chat with it directly about a device or website problem; shopping
+goes through the orchestrator.
+
+Run on its own:  python agents/technical_helper/agent.py   (port 8010 unless TECHNICAL_HELPER_PORT is set)
 """
 
 from __future__ import annotations
 
-import os
 import sys
-import threading
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from shared.local import agent_options, create_text_chat, relayed_session  # noqa: E402
-
-from groq import Groq
-from uagents import Agent, Context, Protocol
-from uagents_core.contrib.protocols.chat import (
-    ChatAcknowledgement,
-    ChatMessage,
-    EndSessionContent,
-    MetadataContent,
-    StartSessionContent,
-    TextContent,
-    chat_protocol_spec,
+from shared.agents import (  # noqa: E402
+    AGENTS,
+    RESET_WORDS,
+    Terminal,
+    address,
+    chat_protocol,
+    deliver,
+    make_agent,
+    own_agent,
+    run,
 )
-
-MODEL = os.getenv("GROQ_MODEL", "").strip() or "openai/gpt-oss-120b"
-HISTORY_TURNS = 12
-
-SYSTEM = (
-    "You are a patient technical helper for older or less technical people. "
-    "Help with phones, computers, email, passwords, Wi-Fi, printers and websites. "
-    "Give one or two steps at a time in plain words, then ask if it worked. "
-    "Say exactly what the button or menu is called and where it is on the screen. "
-    "No jargon. Short sentences. "
-    "Never ask for passwords, card numbers, codes sent by text, or other secrets. "
-    "If someone asks them to pay, send gift cards, install remote-control software "
-    "or read out a code, say it is probably a scam and to hang up or close the page."
+from shared.models import (  # noqa: E402
+    SHOPPING_PROTOCOL,
+    PageResponse,
+    ProductSearchTask,
+    ScrapeResponse,
+    TaskAck,
+    TechHelpTask,
 )
+from uagents import Agent, Context, Protocol  # noqa: E402
+
+from technical_helper.flow import ProductSearches, Send, TechHelp  # noqa: E402
 
 
-agent = Agent(**agent_options("technical_helper"))
-
-chat_proto = Protocol(spec=chat_protocol_spec)
-groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
-
-
-@dataclass
-class Session:
-    history: list[dict[str, str]] = field(default_factory=list)
+async def send_all(ctx: Context, sends: list[Send]) -> None:
+    for send in sends:
+        await ctx.send(send.to, send.message)
 
 
-sessions: dict[str, Session] = {}
+def create(searches: ProductSearches | None = None, help_desk: TechHelp | None = None,
+           **agent_options) -> tuple[Agent, Terminal]:
+    agent = make_agent("technical_helper", **agent_options)
+    scraper, orchestrator = address("scraper"), address("orchestrator")
+    searches = searches or ProductSearches(scraper=scraper, orchestrator=orchestrator)
+    help_desk = help_desk or TechHelp(scraper=scraper, orchestrator=orchestrator)
 
+    # From the orchestrator.
+    shopping = Protocol(name=SHOPPING_PROTOCOL[0], version=SHOPPING_PROTOCOL[1])
 
-def _complete(messages: list[dict[str, str]]) -> str:
-    kwargs = {
-        "model": MODEL,
-        "messages": messages,
-        "temperature": 0.3,
-        "max_completion_tokens": 500,
-    }
-    if "gpt-oss" in MODEL:
-        kwargs["reasoning_effort"] = "low"
-    message = groq_client.chat.completions.create(**kwargs).choices[0].message
-    return (message.content or "").strip()
+    @shopping.on_message(ProductSearchTask, replies={TaskAck})
+    async def on_product_task(ctx: Context, sender: str, msg: ProductSearchTask):
+        ctx.logger.info(f"[{msg.task_id}] product task: {msg.hard_constraints.category}"
+                        + (f" up to {msg.hard_constraints.max_price:g} {msg.hard_constraints.currency}"
+                           if msg.hard_constraints.max_price else ""))
+        await send_all(ctx, await searches.on_task(sender, msg))
 
+    @shopping.on_message(TechHelpTask, replies={TaskAck})
+    async def on_help_task(ctx: Context, sender: str, msg: TechHelpTask):
+        ctx.logger.info(f"[{msg.task_id}] help task" + (" with a page" if msg.page_url else ""))
+        await send_all(ctx, await help_desk.on_task(sender, msg))
 
-def answer(sender: str, text: str) -> str:
-    text = text.strip()
-    if not text:
-        return "Tell me what isn't working."
-    session = sessions.setdefault(sender, Session())
-    if text.lower() in {"start over", "reset", "new problem"}:
-        session.history.clear()
-        return "Okay. What would you like help with?"
+    agent.include(shopping, publish_manifest=True)
 
-    session.history.append({"role": "user", "content": text})
-    session.history = session.history[-HISTORY_TURNS:]
-    try:
-        reply = _complete([{"role": "system", "content": SYSTEM}, *session.history])
-    except Exception:
-        reply = ""
-    if not reply:
-        session.history.pop()
-        return "I couldn't think that through just now. Try again in a moment."
-    session.history.append({"role": "assistant", "content": reply})
-    return reply
+    # From the scraper.
+    scraping = Protocol(name="hmh-scrape-client", version="1.0.0")
 
+    @scraping.on_message(TaskAck)
+    async def on_scraper_ack(ctx: Context, sender: str, msg: TaskAck):
+        if msg.status == "rejected":
+            ctx.logger.warning(f"[{msg.task_id}] scraper refused {msg.request_id}: {msg.error.code if msg.error else ''}")
+        await send_all(ctx, await searches.on_scrape_ack(sender, msg))
 
-@chat_proto.on_message(ChatMessage)
-async def handle_chat_message(ctx: Context, sender: str, msg: ChatMessage):
-    ctx.logger.info(f"Message from {sender}")
-    await ctx.send(
-        sender,
-        ChatAcknowledgement(
-            timestamp=datetime.now(timezone.utc),
-            acknowledged_msg_id=msg.msg_id,
-        ),
-    )
-    session = relayed_session(sender, msg)
-    key = session or sender
-    for item in msg.content:
-        if isinstance(item, StartSessionContent):
-            ctx.logger.info(f"Session started with {sender}")
-        elif isinstance(item, TextContent):
-            ctx.logger.info(f"Text from {sender}: {item.text}")
-            try:
-                reply = answer(key, item.text)
-            except Exception as exc:
-                ctx.logger.error(f"Technical helper failed: {exc}")
-                reply = "Something went wrong on my side. Try again."
-            await ctx.send(sender, create_text_chat(reply, session))
-        elif isinstance(item, EndSessionContent):
-            ctx.logger.info(f"Session ended with {sender}")
-            sessions.pop(key, None)
-        elif isinstance(item, MetadataContent):
-            pass
-        else:
-            ctx.logger.info(f"Ignored content from {sender}")
+    @scraping.on_message(ScrapeResponse)
+    async def on_listings(ctx: Context, sender: str, msg: ScrapeResponse):
+        sends = await searches.on_scrape_response(sender, msg)
+        for send in sends:
+            kind = type(send.message).__name__
+            status = getattr(send.message, "status", "")
+            ctx.logger.info(f"[{msg.task_id}] {msg.status} with {len(msg.candidates)} listing(s) -> {kind} {status}")
+        await send_all(ctx, sends)
 
+    @scraping.on_message(PageResponse)
+    async def on_page(ctx: Context, sender: str, msg: PageResponse):
+        await send_all(ctx, await help_desk.on_page(sender, msg))
 
-@chat_proto.on_message(ChatAcknowledgement)
-async def handle_acknowledgement(ctx: Context, sender: str, msg: ChatAcknowledgement):
-    ctx.logger.info(f"Acknowledgement from {sender} for {msg.acknowledged_msg_id}")
+    agent.include(scraping)
 
+    @agent.on_interval(period=5.0)
+    async def sweep(ctx: Context):
+        await send_all(ctx, await searches.sweep())
+        await send_all(ctx, await help_desk.sweep())
 
-agent.include(chat_proto, publish_manifest=False)
+    orchestrator_name = AGENTS["orchestrator"].display_name
 
-
-@agent.on_event("startup")
-async def startup(ctx: Context):
-    ctx.logger.info("Technical helper ready")
-
-
-def _repl() -> None:
-    print("Technical helper", flush=True)
-    while True:
-        try:
-            text = input("> ")
-        except EOFError:
+    async def on_chat(ctx: Context, sender: str, text: str) -> None:
+        if text.lower() in RESET_WORDS:
+            help_desk.reset(sender)
+            await deliver(ctx, sender, "Okay. What would you like help with?")
             return
-        if text.strip().lower() in {"quit", "exit"}:
-            os._exit(0)
-        try:
-            print(answer("local", text), flush=True)
-        except Exception as exc:
-            print(f"Something went wrong. {exc}", flush=True)
+        reply, _ = await help_desk.answer(sender, text)
+        if sender != "local":
+            reply += f"\n\nLooking for something to buy? Chat with {orchestrator_name} ({orchestrator})."
+        await deliver(ctx, sender, reply)
+
+    agent.include(chat_protocol(on_chat, on_end=help_desk.reset, ignore=own_agent), publish_manifest=True)
+
+    @agent.on_event("startup")
+    async def startup(ctx: Context):
+        ctx.logger.info(f"Technical helper ready. Orchestrator {orchestrator}, scraper {scraper}")
+
+    terminal = Terminal(agent, "Hold My Hand Technical Helper", on_chat, AGENTS["technical_helper"].repl_var)
+    return agent, terminal
 
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(errors="replace")
-    print(f"Agent address: {agent.address}", flush=True)
-    if os.getenv("TECHNICAL_HELPER_REPL", "1") != "0":
-        threading.Thread(target=_repl, daemon=True).start()
-    agent.run()
+    run(*create())

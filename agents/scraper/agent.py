@@ -1,177 +1,174 @@
-"""Scraper uAgent.
+"""Hold My Hand Scraper uAgent.
 
-Same shape as the other local agents: chat protocol, Groq, no mailbox.
-Registration stays off. Talk in this terminal, or send a chat message to the local endpoint.
-Send a public URL and a goal; it reads the page and says where to click.
-Follow-up questions use the last page read in that chat.
+Takes ScrapeRequest and PageRequest messages from the technical helper only, runs the
+approved Apify Actor (or reads one public page), and returns facts with their source.
+It never picks a winner. People who chat with it directly are pointed to the
+orchestrator, so nobody outside the workflow can start a paid Apify run.
+
+Run on its own:  python agents/scraper/agent.py   (port 8030 unless SCRAPER_PORT is set)
+The terminal chat runs one real, paid search per line; set SCRAPER_REPL=0 to turn it off.
 """
 
 from __future__ import annotations
 
-import os
+import asyncio
 import sys
-import threading
-from dataclasses import dataclass
-from datetime import datetime, timezone
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from shared.local import agent_options, create_text_chat, relayed_session  # noqa: E402
-
-from groq import Groq
-from uagents import Agent, Context, Protocol
-from uagents_core.contrib.protocols.chat import (
-    ChatAcknowledgement,
-    ChatMessage,
-    EndSessionContent,
-    MetadataContent,
-    StartSessionContent,
-    TextContent,
-    chat_protocol_spec,
+from shared.agents import (  # noqa: E402
+    AGENTS,
+    LOCAL,
+    Terminal,
+    address,
+    chat_protocol,
+    deliver,
+    make_agent,
+    own_agent,
+    run,
 )
-
-from page import Page, ScrapeError, describe, fetch, find_url
-
-MODEL = os.getenv("GROQ_MODEL", "").strip() or "openai/gpt-oss-120b"
-
-SYSTEM = (
-    "You help an older or less technical person find their way around a website. "
-    "Use only the page below. Never claim you clicked anything. "
-    "Word it as guidance: 'Look for...', 'Select...'. "
-    "Name links and buttons exactly as they appear. "
-    "Give at most four short numbered steps. "
-    "If the page doesn't have what they want, say so and name the closest link."
+from shared.models import (  # noqa: E402
+    SCRAPE_PROTOCOL,
+    SCRAPER,
+    TECHNICAL_HELPER,
+    ErrorInfo,
+    PageLink,
+    PageRequest,
+    PageResponse,
+    ScrapeFilters,
+    ScrapeRequest,
+    ScrapeResponse,
+    TaskAck,
+    new_id,
+    now_iso,
 )
+from uagents import Agent, Context, Protocol  # noqa: E402
+
+from scraper.flow import Scraper  # noqa: E402
+from scraper.page import ScrapeError, fetch  # noqa: E402
+
+RESULT_TTL_SECONDS = 900
 
 
-agent = Agent(**agent_options("scraper"))
-
-chat_proto = Protocol(spec=chat_protocol_spec)
-groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
-
-
-@dataclass
-class Session:
-    page: Page | None = None
+def _ack(task_id: str, request_id: str, status: str, error: ErrorInfo | None = None) -> TaskAck:
+    return TaskAck(task_id=task_id, request_id=request_id, sender_role=SCRAPER, recipient_role=TECHNICAL_HELPER,
+                   sent_at=now_iso(), status=status, error=error)
 
 
-sessions: dict[str, Session] = {}
+def _summary(response: ScrapeResponse) -> str:
+    if response.error:
+        return f"Search failed: {response.error.code}. {response.error.message}"
+    if not response.candidates:
+        return "No listings matched."
+    lines = [f"{len(response.candidates)} listing(s) from {response.search.site}:"]
+    for candidate in response.candidates:
+        price = f"{candidate.price:.2f} {candidate.currency}" if candidate.price is not None else "price not shown"
+        lines.append(f"- {candidate.title} ({candidate.supplier or 'brand not shown'}), {price}\n  {candidate.url}")
+    return "\n".join(lines)
 
 
-def _complete(system: str, user: str) -> str:
-    kwargs = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0.2,
-        "max_completion_tokens": 500,
-    }
-    if "gpt-oss" in MODEL:
-        kwargs["reasoning_effort"] = "low"
-    message = groq_client.chat.completions.create(**kwargs).choices[0].message
-    return (message.content or "").strip()
+def create(scraper: Scraper | None = None, **agent_options) -> tuple[Agent, Terminal]:
+    agent = make_agent("scraper", **agent_options)
+    scraper = scraper or Scraper()
+    helper = address("technical_helper")
+    # request_id -> (finished at, response); running searches are in `running`.
+    finished: dict[str, tuple[float, ScrapeResponse | PageResponse]] = {}
+    running: set[str] = set()
 
+    def forget_old() -> None:
+        now = time.monotonic()
+        for request_id in [key for key, (at, _) in finished.items() if now - at > RESULT_TTL_SECONDS]:
+            del finished[request_id]
 
-def _plain(page: Page) -> str:
-    lines = [f"{page.title or page.url}."]
-    if page.links:
-        lines.append("Links on the page: " + ", ".join(label for label, _ in page.links[:8]) + ".")
-    return " ".join(lines)
+    async def start(ctx: Context, sender: str, task_id: str, request_id: str) -> bool:
+        """Acknowledge a request. False if it shouldn't be run (wrong sender, or already handled)."""
+        if sender != helper:
+            ctx.logger.warning(f"Refused a request from {sender}: only the technical helper may ask for searches")
+            await ctx.send(sender, _ack(task_id, request_id, "rejected", ErrorInfo(
+                code="unauthorized_sender", message="Only the Hold My Hand Technical Helper can request searches.")))
+            return False
+        forget_old()
+        if request_id in finished:
+            await ctx.send(sender, _ack(task_id, request_id, "duplicate"))
+            await ctx.send(sender, finished[request_id][1])
+            return False
+        if request_id in running:
+            await ctx.send(sender, _ack(task_id, request_id, "duplicate"))
+            return False
+        running.add(request_id)
+        await ctx.send(sender, _ack(task_id, request_id, "accepted"))
+        return True
 
+    proto = Protocol(name=SCRAPE_PROTOCOL[0], version=SCRAPE_PROTOCOL[1])
 
-def answer(sender: str, text: str) -> str:
-    text = text.strip()
-    if not text:
-        return "Send me a web address and what you want to do there."
-    session = sessions.setdefault(sender, Session())
-
-    url = find_url(text)
-    if url:
-        try:
-            session.page = fetch(url)
-        except ScrapeError as exc:
-            return str(exc)
-    if session.page is None:
-        return "Which website? Send me its address."
-
-    goal = text
-    if url:
-        goal = goal.replace(url, "").replace(url.removeprefix("https://"), "").strip(" ,.-")
-    if not goal:
-        goal = "What is this page for and what are the main things I can do here?"
-    try:
-        reply = _complete(SYSTEM, f"Goal: {goal}\n\n{describe(session.page)}")
-    except Exception:
-        reply = ""
-    return reply or _plain(session.page)
-
-
-@chat_proto.on_message(ChatMessage)
-async def handle_chat_message(ctx: Context, sender: str, msg: ChatMessage):
-    ctx.logger.info(f"Message from {sender}")
-    await ctx.send(
-        sender,
-        ChatAcknowledgement(
-            timestamp=datetime.now(timezone.utc),
-            acknowledged_msg_id=msg.msg_id,
-        ),
-    )
-    session = relayed_session(sender, msg)
-    key = session or sender
-    for item in msg.content:
-        if isinstance(item, StartSessionContent):
-            ctx.logger.info(f"Session started with {sender}")
-        elif isinstance(item, TextContent):
-            ctx.logger.info(f"Text from {sender}: {item.text}")
-            try:
-                reply = answer(key, item.text)
-            except Exception as exc:
-                ctx.logger.error(f"Scraper failed: {exc}")
-                reply = "I couldn't read that page. Try again."
-            await ctx.send(sender, create_text_chat(reply, session))
-        elif isinstance(item, EndSessionContent):
-            ctx.logger.info(f"Session ended with {sender}")
-            sessions.pop(key, None)
-        elif isinstance(item, MetadataContent):
-            pass
-        else:
-            ctx.logger.info(f"Ignored content from {sender}")
-
-
-@chat_proto.on_message(ChatAcknowledgement)
-async def handle_acknowledgement(ctx: Context, sender: str, msg: ChatAcknowledgement):
-    ctx.logger.info(f"Acknowledgement from {sender} for {msg.acknowledged_msg_id}")
-
-
-agent.include(chat_proto, publish_manifest=False)
-
-
-@agent.on_event("startup")
-async def startup(ctx: Context):
-    ctx.logger.info("Scraper ready")
-
-
-def _repl() -> None:
-    print("Scraper", flush=True)
-    while True:
-        try:
-            text = input("> ")
-        except EOFError:
+    @proto.on_message(ScrapeRequest, replies={TaskAck, ScrapeResponse})
+    async def on_scrape(ctx: Context, sender: str, msg: ScrapeRequest):
+        if not await start(ctx, sender, msg.task_id, msg.request_id):
             return
-        if text.strip().lower() in {"quit", "exit"}:
-            os._exit(0)
+        ctx.logger.info(f"[{msg.task_id}] search {msg.request_id}: '{msg.search_query}' on {msg.site}")
         try:
-            print(answer("local", text), flush=True)
-        except Exception as exc:
-            print(f"I couldn't read that page. {exc}", flush=True)
+            response = await scraper.search(msg)
+        finally:
+            running.discard(msg.request_id)
+        finished[msg.request_id] = (time.monotonic(), response)
+        ctx.logger.info(f"[{msg.task_id}] {response.status}: {len(response.candidates)} candidate(s), "
+                        f"{response.search.items_seen} seen, {response.search.items_dropped} dropped"
+                        + (f", error {response.error.code}" if response.error else ""))
+        await ctx.send(sender, response)
+
+    @proto.on_message(PageRequest, replies={TaskAck, PageResponse})
+    async def on_page(ctx: Context, sender: str, msg: PageRequest):
+        if not await start(ctx, sender, msg.task_id, msg.request_id):
+            return
+        try:
+            page = await asyncio.to_thread(fetch, msg.url)
+            response = PageResponse(
+                task_id=msg.task_id, request_id=msg.request_id, sent_at=now_iso(), status="ok", url=page.url,
+                title=page.title, headings=page.headings[:20],
+                links=[PageLink(label=label, url=href) for label, href in page.links[:40]],
+                text=page.text[:4000], collected_at=now_iso(),
+            )
+        except ScrapeError as exc:
+            response = PageResponse(task_id=msg.task_id, request_id=msg.request_id, sent_at=now_iso(), status="error",
+                                    url=msg.url, error=ErrorInfo(code="page_unavailable", message=str(exc)))
+        finally:
+            running.discard(msg.request_id)
+        finished[msg.request_id] = (time.monotonic(), response)
+        await ctx.send(sender, response)
+
+    @proto.on_message(TaskAck)
+    async def on_ack(ctx: Context, sender: str, msg: TaskAck):
+        ctx.logger.debug(f"Ack from {sender} for {msg.task_id}: {msg.status}")
+
+    agent.include(proto, publish_manifest=True)
+
+    orchestrator = AGENTS["orchestrator"].display_name
+
+    async def on_chat(ctx: Context, sender: str, text: str) -> None:
+        if sender == LOCAL:
+            request = ScrapeRequest(task_id=new_id("local"), request_id=new_id("req"), sender_role="terminal",
+                                    sent_at=now_iso(), search_query=text, site="amazon.com", filters=ScrapeFilters())
+            await deliver(ctx, sender, "Running one Apify search (this uses Apify credit)...")
+            await deliver(ctx, sender, _summary(await scraper.search(request)))
+            return
+        await deliver(ctx, sender, (
+            f"I'm the part of Hold My Hand that collects product listings, so I only take requests from our "
+            f"Technical Helper. To shop, please chat with {orchestrator} at {address('orchestrator')}."
+        ))
+
+    agent.include(chat_protocol(on_chat, ignore=own_agent), publish_manifest=True)
+
+    @agent.on_event("startup")
+    async def startup(ctx: Context):
+        token = "set" if scraper.token() else "MISSING: product searches will return integration_unavailable"
+        ctx.logger.info(f"Scraper ready. Apify token: {token}. Accepting requests from {helper}")
+
+    terminal = Terminal(agent, "Hold My Hand Scraper (each line runs one paid Apify search)", on_chat,
+                        AGENTS["scraper"].repl_var)
+    return agent, terminal
 
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(errors="replace")
-    print(f"Agent address: {agent.address}", flush=True)
-    if os.getenv("SCRAPER_REPL", "1") != "0":
-        threading.Thread(target=_repl, daemon=True).start()
-    agent.run()
+    run(*create())

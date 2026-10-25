@@ -1,272 +1,110 @@
-"""Caretaker uAgent.
+"""Hold My Hand Caregiver uAgent.
 
-Same shape as the other local agents: chat protocol, Groq, no mailbox.
-Registration stays off. Talk in this terminal, or send a chat message to the local endpoint.
+Lets a caregiver the person has approved adjust a few response settings (simpler
+wording, shorter explanations, larger-text hints, language, checking before bigger
+steps, pointing out clear features). It is not an administrator: it can't buy,
+read conversations, change recommendations or touch other agents. The person
+approves access through the orchestrator, sees every change, and can undo it.
+
+Settings live in SpacetimeDB (caregiver_grant, user_preference, preference_audit).
+Until those tables are published, every change is refused with an explanation.
+
+This folder is still called caretaker so paths and CARETAKER_PORT keep working;
+the identity comes from CAREGIVER_SEED.
+
+Run on its own:  python agents/caretaker/agent.py   (port 8020 unless CARETAKER_PORT is set)
 """
 
 from __future__ import annotations
 
-import os
-import re
-import threading
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from uuid import uuid4
+import sys
+from pathlib import Path
 
-from groq import Groq
-from uagents import Agent, Context, Protocol
-from uagents_core.contrib.protocols.chat import (
-    ChatAcknowledgement,
-    ChatMessage,
-    EndSessionContent,
-    StartSessionContent,
-    TextContent,
-    chat_protocol_spec,
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from shared.agents import AGENTS, Terminal, address, chat_protocol, deliver, make_agent, own_agent, run  # noqa: E402
+from shared.models import (  # noqa: E402
+    CAREGIVER_PROTOCOL,
+    CaregiverInviteRequest,
+    CaregiverInviteResult,
+    CaregiverPreferenceProposal,
+    CaregiverPreferenceResult,
+    PreferenceQuery,
+    PreferenceSnapshot,
+    UserRevokeRequest,
 )
-from uagents_core.registration import AgentRegistrationPolicy
+from shared.spacetime import Spacetime, SpacetimeNotConfigured  # noqa: E402
+from uagents import Agent, Context, Protocol  # noqa: E402
 
-from db import Spacetime
-
-PORT = int(os.getenv("CARETAKER_PORT", "8020"))
-SEED = os.getenv("CAREGIVER_SEED", "").strip() or "reframe-caretaker-local"
-MODEL = os.getenv("GROQ_MODEL", "").strip() or "openai/gpt-oss-120b"
+from caretaker.flow import CaregiverService, for_orchestrator  # noqa: E402
+from caretaker.store import PreferenceStore, SpacetimeStore  # noqa: E402
 
 
-class SkipRegistration(AgentRegistrationPolicy):
-    async def register(self, agent_identifier, identity, protocols, endpoints, metadata=None):
+def default_store() -> PreferenceStore | None:
+    try:
+        return SpacetimeStore(Spacetime.from_env())
+    except SpacetimeNotConfigured:
         return None
 
 
-agent = Agent(
-    name="caretaker",
-    seed=SEED,
-    port=PORT,
-    endpoint=[f"http://127.0.0.1:{PORT}/submit"],
-    mailbox=False,
-    registration_policy=SkipRegistration(),
-    publish_agent_details=False,
-    report_events=False,
-)
+def create(service: CaregiverService | None = None, **agent_options) -> tuple[Agent, Terminal]:
+    agent = make_agent("caregiver", **agent_options)
+    orchestrator = address("orchestrator")
+    service = service or CaregiverService(default_store(), orchestrator=orchestrator)
 
-chat_proto = Protocol(spec=chat_protocol_spec)
-db = Spacetime()
-groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
+    proto = Protocol(name=CAREGIVER_PROTOCOL[0], version=CAREGIVER_PROTOCOL[1])
 
+    @proto.on_message(CaregiverInviteRequest, replies={CaregiverInviteResult})
+    async def on_invite(ctx: Context, sender: str, msg: CaregiverInviteRequest):
+        result = await service.invite(sender, msg)
+        ctx.logger.info(f"Invite for {msg.user_ref}: {result.status}" + (f" ({result.error.code})" if result.error else ""))
+        await ctx.send(sender, result)
 
-@dataclass
-class Pending:
-    patient: dict[str, str]
-    request: str
+    @proto.on_message(PreferenceQuery, replies={PreferenceSnapshot})
+    async def on_query(ctx: Context, sender: str, msg: PreferenceQuery):
+        await ctx.send(sender, await service.snapshot(sender, msg))
 
+    @proto.on_message(UserRevokeRequest, replies={PreferenceSnapshot})
+    async def on_revoke(ctx: Context, sender: str, msg: UserRevokeRequest):
+        snapshot = await service.user_revoke(sender, msg)
+        ctx.logger.info(f"Revoke for {msg.user_ref} (access too: {msg.revoke_access}): {snapshot.status}")
+        await ctx.send(sender, snapshot)
 
-@dataclass
-class Session:
-    unlocked: set[str] = field(default_factory=set)
-    pending: Pending | None = None
+    @proto.on_message(CaregiverPreferenceProposal, replies={CaregiverPreferenceResult})
+    async def on_proposal(ctx: Context, sender: str, msg: CaregiverPreferenceProposal):
+        result = await service.on_proposal(sender, msg)
+        ctx.logger.info(f"Proposal {msg.setting} for {msg.user_ref} from {sender}: {result.status}")
+        await ctx.send(sender, result)
+        if result.status in {"applied", "cleared"}:
+            await ctx.send(orchestrator, for_orchestrator(result))
 
+    agent.include(proto, publish_manifest=True)
 
-sessions: dict[str, Session] = {}
+    async def on_chat(ctx: Context, sender: str, text: str) -> None:
+        reply, change = await service.chat(sender, text)
+        if change is not None:
+            ctx.logger.info(f"Caregiver {sender} set {change.setting} for {change.user_ref}: {change.status}")
+            await ctx.send(orchestrator, for_orchestrator(change))
+        await deliver(ctx, sender, reply)
 
+    agent.include(chat_protocol(on_chat, ignore=own_agent), publish_manifest=True)
 
-def create_text_chat(text: str) -> ChatMessage:
-    return ChatMessage(content=[TextContent(text=text)], msg_id=uuid4(), timestamp=datetime.now(timezone.utc))
-
-
-def _complete(system: str, user: str) -> str:
-    kwargs = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0.3,
-        "max_completion_tokens": 400,
-    }
-    if "gpt-oss" in MODEL:
-        kwargs["reasoning_effort"] = "low"
-    message = groq_client.chat.completions.create(**kwargs).choices[0].message
-    return (message.content or "").strip()
-
-
-def _match(text: str, patients: list[dict[str, str]]) -> list[dict[str, str]]:
-    folded = text.lower()
-    hits = []
-    for patient in patients:
-        names = [patient["full_name"].lower(), *patient["full_name"].lower().split()]
-        if any(len(name) > 2 and name in folded for name in names):
-            hits.append(patient)
-    return hits
-
-
-def _note_body(text: str) -> str | None:
-    match = re.search(
-        r"\bnote\b\s*(?:for\s+[^:]{0,80}?)?\s*(?:that|:|-)\s*(.+)",
-        text,
-        re.I | re.S,
-    )
-    if not match:
-        match = re.search(r"\bnote\b\s+(.+)", text, re.I | re.S)
-    if not match:
-        return None
-    body = match.group(1).strip().strip(".")
-    if body.lower().startswith("for ") and ":" in body:
-        body = body.split(":", 1)[1].strip()
-    return body or None
-
-
-def _plain(patient: dict[str, str], notes: list[dict[str, str]], saved: str | None) -> str:
-    lines = [
-        f"{patient['full_name']}, born {patient['date_of_birth']}, lives in {patient['city']}.",
-        f"{patient['conditions']}. {patient['medications']}.",
-    ]
-    if notes:
-        lines.append(f"Latest note: {notes[-1]['body']}")
-    if saved:
-        lines.append("Saved.")
-    return " ".join(lines)
-
-
-def _phrase(patient: dict[str, str], notes: list[dict[str, str]], request: str, saved: str | None) -> str:
-    note_lines = "\n".join(f"- {note['body']}" for note in notes) or "None"
-    saved_line = f"You just saved this note: {saved}" if saved else "No new note."
-    system = (
-        "You are a caretaker speaking with a colleague. "
-        "Use only the record below. Two or three short sentences. "
-        "Name the medication. Do not give new medical advice."
-    )
-    user = (
-        f"Request: {request}\n"
-        f"Name: {patient['full_name']}\n"
-        f"Born: {patient['date_of_birth']}\n"
-        f"City: {patient['city']}\n"
-        f"Conditions: {patient['conditions']}\n"
-        f"Medications: {patient['medications']}\n"
-        f"Notes:\n{note_lines}\n"
-        f"{saved_line}"
-    )
-    try:
-        text = _complete(system, user)
-    except Exception:
-        text = ""
-    if not text:
-        return _plain(patient, notes, saved)
-    if patient["city"].lower() not in text.lower():
-        text = f"{text} Lives in {patient['city']}."
-    medication = patient["medications"].split()[0]
-    if medication.lower() not in text.lower():
-        text = f"{text} {patient['medications']}."
-    if saved and "saved" not in text.lower():
-        text = f"{text} Saved."
-    return text
-
-
-def _open(patient: dict[str, str], request: str) -> str:
-    saved = _note_body(request)
-    if saved:
-        db.add_note(patient["patient_id"], "caretaker", saved)
-    notes = db.notes(patient["patient_id"])
-    return _phrase(patient, notes, request, saved)
-
-
-def answer(sender: str, text: str) -> str:
-    text = text.strip()
-    if not text:
-        return "Say what you need."
-    db.ensure_patients()
-    patients = db.patients()
-    session = sessions.setdefault(sender, Session())
-
-    if session.pending is not None:
-        patient = session.pending.patient
-        request = session.pending.request
-        session.unlocked.add(patient["patient_id"])
-        session.pending = None
-        return _open(patient, request)
-
-    hits = _match(text, patients)
-    if len(hits) > 1:
-        return "Which person, " + " or ".join(patient["full_name"] for patient in hits) + "?"
-    if len(hits) == 1:
-        patient = hits[0]
-        if patient["patient_id"] not in session.unlocked:
-            session.pending = Pending(patient, text)
-            return f"Before I open {patient['full_name']}'s record: {patient['security_question']}"
-        return _open(patient, text)
-
-    if re.search(r"\b(patients|who|list|names|people)\b", text, re.I):
-        return "I look after " + ", ".join(patient["full_name"] for patient in patients) + "."
-
-    try:
-        names = ", ".join(patient["full_name"] for patient in patients)
-        return _complete(
-            "You are a caretaker. One or two short sentences. "
-            f"You look after {names}. Do not invent their records. "
-            "If they ask about a person, tell them to use that person's name.",
-            text,
-        )
-    except Exception:
-        return "Tell me the person's name."
-
-
-@chat_proto.on_message(ChatMessage)
-async def handle_chat_message(ctx: Context, sender: str, msg: ChatMessage):
-    ctx.logger.info(f"Message from {sender}")
-    await ctx.send(
-        sender,
-        ChatAcknowledgement(
-            timestamp=datetime.now(timezone.utc),
-            acknowledged_msg_id=msg.msg_id,
-        ),
-    )
-    for item in msg.content:
-        if isinstance(item, StartSessionContent):
-            ctx.logger.info(f"Session started with {sender}")
-        elif isinstance(item, TextContent):
-            ctx.logger.info(f"Text from {sender}: {item.text}")
-            try:
-                reply = answer(sender, item.text)
-            except Exception as exc:
-                ctx.logger.error(f"Caretaker failed: {exc}")
-                reply = "I couldn't reach the records. Try again."
-            await ctx.send(sender, create_text_chat(reply))
-        elif isinstance(item, EndSessionContent):
-            ctx.logger.info(f"Session ended with {sender}")
-            sessions.pop(sender, None)
+    @agent.on_event("startup")
+    async def startup(ctx: Context):
+        if service.store is None:
+            ctx.logger.warning("Caregiver storage: OFF (SPACETIME_DB_NAME/SPACETIME_TOKEN not set). All changes are refused.")
         else:
-            ctx.logger.info(f"Ignored content from {sender}")
+            reason = await service.store.ready()
+            if reason:
+                ctx.logger.warning(f"Caregiver storage: OFF, {reason}")
+            else:
+                ctx.logger.info("Caregiver storage: ready")
+        ctx.logger.info(f"Caregiver ready. Trusts person requests only from the orchestrator {orchestrator}")
 
-
-@chat_proto.on_message(ChatAcknowledgement)
-async def handle_acknowledgement(ctx: Context, sender: str, msg: ChatAcknowledgement):
-    ctx.logger.info(f"Acknowledgement from {sender} for {msg.acknowledged_msg_id}")
-
-
-agent.include(chat_proto, publish_manifest=False)
-
-
-@agent.on_event("startup")
-async def startup(ctx: Context):
-    db.ensure_patients()
-    ctx.logger.info("Caretaker ready")
-
-
-def _repl() -> None:
-    print("Caretaker", flush=True)
-    while True:
-        try:
-            text = input("> ")
-        except EOFError:
-            return
-        if text.strip().lower() in {"quit", "exit"}:
-            os._exit(0)
-        try:
-            print(answer("local", text), flush=True)
-        except Exception as exc:
-            print(f"I couldn't reach the records. {exc}", flush=True)
+    terminal = Terminal(agent, "Hold My Hand Caregiver (you are a caregiver called 'local')", on_chat,
+                        AGENTS["caregiver"].repl_var)
+    return agent, terminal
 
 
 if __name__ == "__main__":
-    print(f"Agent address: {agent.address}", flush=True)
-    if os.getenv("CARETAKER_REPL", "1") != "0":
-        threading.Thread(target=_repl, daemon=True).start()
-    agent.run()
+    run(*create())

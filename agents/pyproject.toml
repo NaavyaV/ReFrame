@@ -3,9 +3,24 @@ name = "reframe-agents"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "apify-client>=3.3.0",
     "groq>=1.7.0",
     "httpx>=0.28.1",
     "python-dotenv>=1.2.4",
     "uagents>=0.22.0",
     "uagents-core>=0.3.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["live: calls a real external service (Apify, Groq or Agentverse); skipped unless HMH_LIVE_TESTS=1"]
+# Agents built only to inspect them queue a manifest upload that never runs.
+filterwarnings = ["ignore:coroutine 'Agent.publish_manifest' was never awaited:RuntimeWarning"]

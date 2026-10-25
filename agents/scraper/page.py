@@ -1,12 +1,15 @@
-"""Public page fetching for the scraper.
+"""Public page reading for the scraper, used for "where do I click?" help.
 
-Plain httpx with robots.txt respected. Keeps only what a reader would see:
-title, headings, links and visible text. Scripts, styles and form values are dropped.
+Plain httpx with robots.txt respected. Product search goes through Apify (see
+flow.py); this only reads one public page a person asked about. Every address,
+including each redirect, must be a public http(s) host on a standard port, so a
+message can't make the scraper fetch localhost or a private network.
+Keeps only what a reader would see: title, headings, links and visible text.
+Scripts, styles and form values are dropped, and the text is treated as untrusted.
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
@@ -14,12 +17,14 @@ from urllib.robotparser import RobotFileParser
 
 import httpx
 
-USER_AGENT = "ReFrameScraper/0.1"
+from shared.security import UnsafeURL, check_public_url, clean_text, find_url  # noqa: F401
+
+USER_AGENT = "HoldMyHandScraper/0.2"
 MAX_BYTES = 2_000_000
 MAX_TEXT = 6000
 MAX_LINKS = 60
+MAX_REDIRECTS = 4
 SKIP_TAGS = {"script", "style", "noscript", "template", "svg", "iframe"}
-URL_RE = re.compile(r"https?://[^\s<>\"')]+", re.I)
 
 
 class ScrapeError(Exception):
@@ -90,26 +95,40 @@ class _Reader(HTMLParser):
             self.text.append(data.strip())
 
 
-def find_url(text: str) -> str | None:
-    match = URL_RE.search(text)
-    if match:
-        return match.group(0).rstrip(".,;:!?")
-    bare = re.search(r"\b((?:[a-z0-9-]+\.)+[a-z]{2,})(/\S*)?", text, re.I)
-    if bare:
-        return "https://" + bare.group(0).rstrip(".,;:!?")
-    return None
+def _get(client: httpx.Client, url: str, limit: int = MAX_BYTES) -> tuple[httpx.Response, str, str]:
+    """GET a public URL, checking every redirect hop. Returns (response, final url, body text)."""
+    for _ in range(MAX_REDIRECTS + 1):
+        try:
+            check_public_url(url)
+        except UnsafeURL as exc:
+            raise ScrapeError(str(exc)) from exc
+        try:
+            with client.stream("GET", url) as response:
+                if response.is_redirect and response.headers.get("location"):
+                    url = urljoin(url, response.headers["location"])
+                    continue
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    body.extend(chunk)
+                    if len(body) >= limit:
+                        break
+                text = bytes(body[:limit]).decode(response.encoding or "utf-8", errors="replace")
+                return response, url, text
+        except httpx.HTTPError as exc:
+            raise ScrapeError(f"I couldn't open that page ({exc.__class__.__name__}).") from exc
+    raise ScrapeError("That page sends me on too many redirects.")
 
 
 def _allowed(client: httpx.Client, url: str) -> bool:
     parts = urlsplit(url)
     robots = RobotFileParser()
     try:
-        response = client.get(f"{parts.scheme}://{parts.netloc}/robots.txt")
-    except httpx.HTTPError:
+        response, _, text = _get(client, f"{parts.scheme}://{parts.netloc}/robots.txt", 200_000)
+    except ScrapeError:
         return True
     if response.status_code >= 400:
         return True
-    robots.parse(response.text.splitlines())
+    robots.parse(text.splitlines())
     return robots.can_fetch(USER_AGENT, url)
 
 
@@ -117,31 +136,24 @@ def fetch(url: str) -> Page:
     parts = urlsplit(url)
     if parts.scheme not in {"http", "https"} or not parts.netloc:
         raise ScrapeError("That doesn't look like a web address.")
-    with httpx.Client(
-        headers={"User-Agent": USER_AGENT},
-        follow_redirects=True,
-        timeout=20.0,
-    ) as client:
+    with httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=False, timeout=20.0) as client:
         if not _allowed(client, url):
             raise ScrapeError("That site asks not to be read by tools like me.")
-        try:
-            response = client.get(url)
-        except httpx.HTTPError as exc:
-            raise ScrapeError(f"I couldn't open that page. {exc}") from exc
+        response, final_url, body = _get(client, url)
     if response.status_code >= 400:
         raise ScrapeError(f"The site answered with error {response.status_code}.")
     if "html" not in response.headers.get("content-type", "html"):
         raise ScrapeError("That address isn't a web page I can read.")
 
-    reader = _Reader(str(response.url))
-    reader.feed(response.text[:MAX_BYTES])
-    text = " ".join(reader.text)
+    reader = _Reader(final_url)
+    reader.feed(body)
+    text = clean_text(" ".join(reader.text), MAX_TEXT)
     return Page(
-        url=str(response.url).split("?", 1)[0],
-        title=" ".join(" ".join(reader.title).split()),
-        headings=reader.headings[:30],
-        links=reader.links,
-        text=text[:MAX_TEXT],
+        url=final_url.split("?", 1)[0],
+        title=clean_text(" ".join(reader.title), 200),
+        headings=[clean_text(heading, 120) for heading in reader.headings[:30]],
+        links=[(clean_text(label, 80), href) for label, href in reader.links],
+        text=text,
     )
 
 
