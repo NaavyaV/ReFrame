@@ -21,9 +21,7 @@ Simple visual requests (bigger/smaller text, dark mode, high contrast, hide imag
 | `extension/` | Chrome MV3 extension (content scripts, service worker, widget) |
 | `backend/` | FastAPI server: auth, `/reframe`, Groq calls |
 | `spacetime/` | SpacetimeDB module storing user accounts |
-| `demo-site/` | Static utility-company site for testing |
-| `agents/` | Fetch.ai uAgents: technical helper, scraper, caretaker |
-| `docs/BUILD_PLAN.md` | Phased build plan |
+| `agents/` | Fetch.ai uAgents: orchestrator, technical helper, scraper, caretaker |
 
 ## Requirements
 
@@ -76,22 +74,14 @@ uv run uvicorn app.main:app --port 8000 --reload
 
 Check it at <http://localhost:8000/health>.
 
-### 4. Demo site (optional)
+### 4. Agents (optional)
 
-```bash
-cd demo-site
-python3 -m http.server 5173
-```
-
-Open <http://localhost:5173>.
-
-### 5. Agents (optional)
-
-Three local uAgents with the chat protocol, Groq, no mailbox and registration off. Each prints its address and opens a chat in its terminal.
+Four local uAgents with the chat protocol, Groq, no mailbox and registration off. Each prints its address and opens a chat in its terminal. Talk to the orchestrator; it hands each message to the right agent and passes the reply back. Run each agent in its own terminal.
 
 ```bash
 cd agents
 uv sync
+cd orchestrator && uv run --project .. python agent.py       # port 8040
 cd technical_helper && uv run --project .. python agent.py   # port 8010
 cd scraper && uv run --project .. python agent.py            # port 8030
 cd caretaker && uv run --project .. python agent.py          # port 8020
@@ -99,11 +89,12 @@ cd caretaker && uv run --project .. python agent.py          # port 8020
 
 | Agent | What it does | Settings |
 | --- | --- | --- |
+| Orchestrator | Picks the agent for each message (a web address goes to the scraper, patients and medications to the caretaker, anything else by Groq) and relays it as a uAgents message | `ORCHESTRATOR_SEED`, `ORCHESTRATOR_PORT` |
 | Technical helper | Walks someone through a device or website problem one step at a time; warns about scams | `TECHNICAL_HELPER_SEED`, `TECHNICAL_HELPER_PORT` |
 | Scraper | Reads a public page (robots.txt respected) and says where to click for a goal | `SCRAPER_SEED`, `SCRAPER_PORT` |
 | Caretaker | Opens patient records after a security question and saves notes, in SpacetimeDB | `CAREGIVER_SEED`, `CARETAKER_PORT`, `SPACETIME_*` |
 
-Set `<NAME>_REPL=0` to turn off the terminal chat. The caretaker needs the `patient` and `caretaker_note` tables, so publish the current module first.
+The agents find each other by address on `127.0.0.1`, so all four need the same `.env`. Relayed messages carry the user's session, so each person keeps their own conversation and caretaker unlocks. Say "start over" to reset. Set `<NAME>_REPL=0` to turn off an agent's terminal chat. The caretaker needs the `patient` and `caretaker_note` tables, so publish the current module first.
 
 ## Install the extension
 
@@ -116,7 +107,7 @@ The extension talks to `http://localhost:8000` by default, so keep the backend r
 
 ## Use it
 
-1. Open any website (or the demo site).
+1. Open any website.
 2. Click the ReFrame toolbar icon, the orb in the top-right corner, or press **Alt+Shift+R**.
 3. Create an account or sign in.
 4. Type a request, for example:

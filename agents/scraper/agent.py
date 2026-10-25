@@ -14,14 +14,10 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
 
-try:
-    from dotenv import load_dotenv
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-    load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-except Exception:
-    pass
+from shared.local import agent_options, create_text_chat, relayed_session  # noqa: E402
 
 from groq import Groq
 from uagents import Agent, Context, Protocol
@@ -29,16 +25,14 @@ from uagents_core.contrib.protocols.chat import (
     ChatAcknowledgement,
     ChatMessage,
     EndSessionContent,
+    MetadataContent,
     StartSessionContent,
     TextContent,
     chat_protocol_spec,
 )
-from uagents_core.registration import AgentRegistrationPolicy
 
 from page import Page, ScrapeError, describe, fetch, find_url
 
-PORT = int(os.getenv("SCRAPER_PORT", "8030"))
-SEED = os.getenv("SCRAPER_SEED", "").strip() or "reframe-scraper-local"
 MODEL = os.getenv("GROQ_MODEL", "").strip() or "openai/gpt-oss-120b"
 
 SYSTEM = (
@@ -51,21 +45,7 @@ SYSTEM = (
 )
 
 
-class SkipRegistration(AgentRegistrationPolicy):
-    async def register(self, agent_identifier, identity, protocols, endpoints, metadata=None):
-        return None
-
-
-agent = Agent(
-    name="scraper",
-    seed=SEED,
-    port=PORT,
-    endpoint=[f"http://127.0.0.1:{PORT}/submit"],
-    mailbox=False,
-    registration_policy=SkipRegistration(),
-    publish_agent_details=False,
-    report_events=False,
-)
+agent = Agent(**agent_options("scraper"))
 
 chat_proto = Protocol(spec=chat_protocol_spec)
 groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
@@ -77,10 +57,6 @@ class Session:
 
 
 sessions: dict[str, Session] = {}
-
-
-def create_text_chat(text: str) -> ChatMessage:
-    return ChatMessage(content=[TextContent(text=text)], msg_id=uuid4(), timestamp=datetime.now(timezone.utc))
 
 
 def _complete(system: str, user: str) -> str:
@@ -143,20 +119,24 @@ async def handle_chat_message(ctx: Context, sender: str, msg: ChatMessage):
             acknowledged_msg_id=msg.msg_id,
         ),
     )
+    session = relayed_session(sender, msg)
+    key = session or sender
     for item in msg.content:
         if isinstance(item, StartSessionContent):
             ctx.logger.info(f"Session started with {sender}")
         elif isinstance(item, TextContent):
             ctx.logger.info(f"Text from {sender}: {item.text}")
             try:
-                reply = answer(sender, item.text)
+                reply = answer(key, item.text)
             except Exception as exc:
                 ctx.logger.error(f"Scraper failed: {exc}")
                 reply = "I couldn't read that page. Try again."
-            await ctx.send(sender, create_text_chat(reply))
+            await ctx.send(sender, create_text_chat(reply, session))
         elif isinstance(item, EndSessionContent):
             ctx.logger.info(f"Session ended with {sender}")
-            sessions.pop(sender, None)
+            sessions.pop(key, None)
+        elif isinstance(item, MetadataContent):
+            pass
         else:
             ctx.logger.info(f"Ignored content from {sender}")
 
