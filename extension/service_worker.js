@@ -321,6 +321,8 @@ async function onRestored(tabId) {
   retriedRebuild.delete(tabId);
   await chrome.storage.session.remove([keys(tabId).goal, keys(tabId).chat]);
   await broadcast(tabId);
+  const auth = await getAuth();
+  if (auth?.token) apiFetch('/tracker/clear', { method: 'POST', token: auth.token }).catch(() => {});
 }
 
 chrome.action.onClicked.addListener(toggleWidget);

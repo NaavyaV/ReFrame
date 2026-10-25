@@ -13,8 +13,8 @@ from .quick import quick_reframe
 from .ratelimit import RateLimited, UserLimiter
 from .reframer import reframe
 from .schemas import ReframeRequest, ReframeResponse
-from .stdb import SpacetimeClient
-from .tracker import Tracker
+from .stdb import SpacetimeClient, SpacetimeError
+from .tracker import Tracker, clear_user_runs
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("reframe")
@@ -51,6 +51,16 @@ async def rate_limited(_request: Request, exc: RateLimited) -> JSONResponse:
 
 @app.get("/health")
 async def health() -> dict:
+    return {"ok": True}
+
+
+@app.post("/tracker/clear")
+async def clear_tracker(request: Request, user: PublicUser = Depends(current_user)) -> dict:
+    try:
+        await clear_user_runs(request.app.state.stdb, user.user_id)
+    except SpacetimeError as err:
+        log.warning("tracker clear failed: %s", err)
+        raise HTTPException(502, "Couldn't clear the tracker.")
     return {"ok": True}
 
 

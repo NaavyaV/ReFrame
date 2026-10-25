@@ -6,6 +6,7 @@ delays the page. Only labels and counts are sent, never form field values.
 
 import asyncio
 import logging
+import time
 import uuid
 from urllib.parse import urlsplit
 
@@ -16,6 +17,13 @@ from .stdb import SpacetimeClient
 log = logging.getLogger("reframe.tracker")
 FLUSH_TIMEOUT_S = 0.4
 _pending: set[asyncio.Task] = set()
+# When each user last cleared the tracker; writes from runs started before that are dropped.
+_cleared_at: dict[str, float] = {}
+
+
+async def clear_user_runs(stdb: SpacetimeClient, user_id: str) -> None:
+    _cleared_at[user_id] = time.monotonic()
+    await stdb.call("clear_runs", user_id)
 
 
 class Tracker:
@@ -25,6 +33,7 @@ class Tracker:
         self._req = req
         self._chain: asyncio.Task | None = None
         self.run_id = uuid.uuid4().hex[:16]
+        self._created = time.monotonic()
 
     def _queue(self, reducer: str, *args) -> None:
         previous = self._chain
@@ -32,6 +41,8 @@ class Tracker:
         async def send() -> None:
             if previous:
                 await asyncio.gather(previous, return_exceptions=True)
+            if _cleared_at.get(self._user.user_id, 0) >= self._created:
+                return
             try:
                 await self._stdb.call(reducer, *args)
             except Exception as err:  # the tracker must never break a reframe
