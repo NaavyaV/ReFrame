@@ -1,0 +1,11 @@
+[project]
+name = "reframe-agents"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "groq>=1.7.0",
+    "httpx>=0.28.1",
+    "python-dotenv>=1.2.4",
+    "uagents>=0.22.0",
+    "uagents-core>=0.3.0",
+]
