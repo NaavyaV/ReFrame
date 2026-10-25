@@ -72,6 +72,12 @@
       case 'rf:pending':
         RF.setPending(Boolean(msg.on));
         break;
+      case 'rf:voice-state':
+        RF.ui.setVoiceState(msg.state);
+        break;
+      case 'rf:speak':
+        RF.ui.speak(msg);
+        break;
       case 'rf:snapshot':
         sendResponse({ snapshot: RF.takeSnapshot(), applied: RF.appliedSummary() });
         break;

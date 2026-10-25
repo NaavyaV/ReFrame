@@ -1,4 +1,5 @@
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -6,6 +7,10 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT / ".env")
+
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+# Cartesia "Michelle - Empathetic Voice": gentle and unhurried.
+DEFAULT_VOICE_ID = "d7bf7d75-64b7-4c1e-86c0-79d647366587"
 
 
 def _require(name: str) -> str:
@@ -35,6 +40,12 @@ class Settings:
         self.spacetime_token = _require("SPACETIME_TOKEN")
         self.jwt_secret = _require("JWT_SECRET")
         self.jwt_ttl_hours = int(os.getenv("JWT_TTL_HOURS", "72"))
+        # Voice (optional): without a key the extension falls back to the chat.
+        self.cartesia_api_key = os.getenv("CARTESIA_API_KEY", "").strip()
+        voice = os.getenv("CARTESIA_VOICE_ID", "").strip()
+        self.cartesia_voice_id = voice if _UUID.match(voice) else DEFAULT_VOICE_ID
+        self.cartesia_tts_model = os.getenv("CARTESIA_TTS_MODEL", "sonic-latest").strip()
+        self.cartesia_stt_model = os.getenv("CARTESIA_STT_MODEL", "ink-whisper").strip()
 
 
 @lru_cache

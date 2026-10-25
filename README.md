@@ -51,8 +51,10 @@ Fill in at least:
 | `SPACETIME_DB_NAME` | Your database name |
 | `SPACETIME_TOKEN` | Output of `spacetime login show --token` |
 | `JWT_SECRET` | Any long random string, e.g. `openssl rand -hex 32` |
+| `CARTESIA_API_KEY` | Your Cartesia key (for voice) |
+| `CARTESIA_VOICE_ID` | Optional Cartesia voice UUID; a default voice is used otherwise |
 
-The voice, Agentverse and Apify variables aren't used yet. Never commit `.env`.
+The Agentverse and Apify variables aren't used yet. Never commit `.env`.
 
 ### 2. Database
 
@@ -97,14 +99,25 @@ The extension talks to `http://localhost:8000` by default, so keep the backend r
 ## Use it
 
 1. Open any website (or the demo site).
-2. Click the ReFrame toolbar icon, the orb in the top-right corner, or press **Alt+Shift+R**.
+2. Click the ReFrame toolbar icon, the **⋯** button in the top-right corner, or press **Alt+Shift+R**.
 3. Create an account or sign in.
-4. Type a request, for example:
+4. Click the mic and say a request, or type it in the chat, for example:
    - "I want to download my electricity bill"
    - "Make the text bigger"
    - "Dark mode"
    - "Hide the ads"
 5. Press **Restore** to undo everything on the page.
+
+### Voice
+
+Click the mic and speak. It stops when you go quiet, or click it again. The speech goes to Cartesia (`ink-whisper`) and the text goes to the agent like a typed request. While it works the button shows bouncing dots; then the reply is spoken (Cartesia `sonic`), the button shows a live waveform, and the words appear as they're said. Click the button while it speaks to stop it.
+
+Once you've spoken, replies on the following pages are spoken too, until you type something. If the mic is blocked or voice isn't set up, use the **⋯** chat.
+
+| Endpoint | Does |
+| --- | --- |
+| `POST /voice/transcribe` | audio → text |
+| `POST /voice/speak` | text → WAV, word timings and a loudness envelope |
 
 ## Live tracker
 

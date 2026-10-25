@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ReFrame",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Rebuilds confusing websites around what you want to do.",
   "action": {
     "default_title": "ReFrame"
@@ -16,12 +16,12 @@
       "description": "Open or close the ReFrame chat"
     }
   },
-  "permissions": ["storage", "tabs", "scripting", "activeTab", "contextMenus"],
+  "permissions": ["storage", "tabs", "scripting", "activeTab", "contextMenus", "offscreen"],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["content/snapshot.js", "content/apply.js", "content/widget.js", "content/main.js"],
+      "js": ["content/snapshot.js", "content/apply.js", "content/voice.js", "content/widget.js", "content/main.js"],
       "run_at": "document_idle"
     }
   ]

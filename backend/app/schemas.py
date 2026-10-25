@@ -51,6 +51,7 @@ class ReframeRequest(BaseModel):
     history: list[ChatTurn] = Field(default_factory=list, max_length=12)
     applied: list[str] = Field(default_factory=list, max_length=20)
     continuation: bool = False
+    spoken: bool = False
 
 
 # Operations the extension knows how to apply. Anything else is dropped.

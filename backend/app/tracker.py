@@ -62,7 +62,7 @@ class Tracker:
             urlsplit(url).netloc,
             url,
             self._req.message,
-            "auto" if self._req.continuation else "typed",
+            "auto" if self._req.continuation else "voice" if self._req.spoken else "typed",
         )
 
     def event(self, kind: str, target: str, detail: str = "", step: str = "", progress: int = 0) -> None:

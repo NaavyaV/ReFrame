@@ -7,18 +7,34 @@
     :host{all:initial}
     *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
     [hidden]{display:none!important}
-    .dock{position:fixed;top:72px;right:40px;display:flex;flex-direction:column;align-items:flex-end;gap:10px;
+    .dock{position:fixed;top:32px;right:32px;display:flex;flex-direction:column;align-items:flex-end;gap:10px;
       color:#f4f6fb;font-size:15px;line-height:1.45}
+    .orb-row{display:flex;align-items:center;gap:14px}
     .orb{width:64px;height:64px;border-radius:50%;border:1.5px solid rgba(143,176,255,.55);cursor:pointer;color:#fff;
       background:radial-gradient(circle at 30% 25%,rgba(111,145,255,.75),rgba(18,22,32,.6) 70%);
       backdrop-filter:blur(14px) saturate(1.4);-webkit-backdrop-filter:blur(14px) saturate(1.4);
       box-shadow:0 10px 30px rgba(0,0,0,.3),0 0 0 6px rgba(111,145,255,.12);display:grid;place-items:center;opacity:.72;
-      transition:opacity .2s,transform .2s,background .2s;position:relative;padding:0}
-    .orb:hover,.orb[aria-expanded="true"]{opacity:1;transform:scale(1.06)}
-    .orb svg{width:30px;height:30px}
-    .orb.working::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:2px solid transparent;
-      border-top-color:#8fb0ff;border-right-color:#8fb0ff;animation:spin .8s linear infinite}
-    @keyframes spin{to{transform:rotate(360deg)}}
+      transition:opacity .2s,transform .2s,background .2s,box-shadow .08s;position:relative;padding:0}
+    .orb:hover,.orb[data-state]:not([data-state="idle"]){opacity:1;transform:scale(1.06)}
+    .orb svg{width:28px;height:28px}
+    .orb[data-state="listening"]{background:radial-gradient(circle at 30% 25%,rgba(255,120,120,.85),rgba(70,18,24,.75) 70%);
+      border-color:rgba(255,160,160,.8);
+      box-shadow:0 10px 30px rgba(0,0,0,.3),0 0 0 calc(3px + var(--lvl,0) * 7px) rgba(255,110,110,.3)}
+    .orb-dots{display:flex;gap:5px;align-items:center;height:28px}
+    .orb-dots i{width:8px;height:8px;border-radius:50%;background:#fff;animation:bounce 1s ease-in-out infinite}
+    .orb-dots i:nth-child(2){animation-delay:.15s}.orb-dots i:nth-child(3){animation-delay:.3s}
+    @keyframes bounce{0%,60%,100%{transform:translateY(0);opacity:.55}30%{transform:translateY(-7px);opacity:1}}
+    .orb-wave{display:flex;gap:4px;align-items:center;height:30px}
+    .orb-wave i{width:4px;height:6px;border-radius:2px;background:#fff;transition:height .06s linear}
+    .chat-btn{width:40px;height:40px;border-radius:50%;border:1px solid rgba(255,255,255,.22);cursor:pointer;color:#fff;padding:0;
+      background:rgba(18,22,32,.62);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);display:grid;place-items:center;
+      box-shadow:0 6px 18px rgba(0,0,0,.25);opacity:.8}
+    .chat-btn:hover,.chat-btn[aria-expanded="true"]{opacity:1}
+    .chat-btn svg{width:18px;height:18px}
+    .caption{max-width:min(340px,calc(100vw - 64px));padding:12px 16px;border-radius:16px;font-size:17px;line-height:1.45;
+      background:rgba(16,19,28,.86);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+      border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 32px rgba(0,0,0,.3);animation:pop .16s ease-out}
+    .caption.heard{color:rgba(244,246,251,.8);font-style:italic}
     .panel{width:min(370px,calc(100vw - 56px));height:min(540px,calc(100vh - 170px));display:flex;flex-direction:column;
       background:rgba(16,19,28,.84);backdrop-filter:blur(22px) saturate(1.5);-webkit-backdrop-filter:blur(22px) saturate(1.5);
       border:1px solid rgba(255,255,255,.12);border-radius:20px;box-shadow:0 24px 60px rgba(0,0,0,.38);overflow:hidden;
@@ -73,6 +89,7 @@
   `;
 
   const ICONS = {
+    mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11.5" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>',
     logo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M8 15.5V8.5h4.2a2.3 2.3 0 0 1 0 4.6H8m4.2 0 3 2.4"/></svg>',
     restore: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>',
     more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>',
@@ -91,7 +108,11 @@
   root.innerHTML = `
     <style>${CSS}</style>
     <div class="dock">
-      <button class="orb" aria-label="ReFrame" aria-expanded="false">${ICONS.logo}</button>
+      <div class="orb-row">
+        <button class="chat-btn" aria-label="Open chat" title="Chat" aria-expanded="false">${ICONS.more}</button>
+        <button class="orb" aria-label="Speak to ReFrame" title="Speak" data-state="idle">${ICONS.mic}</button>
+      </div>
+      <div class="caption" aria-live="polite" hidden></div>
       <section class="panel" role="dialog" aria-label="ReFrame" hidden>
         <div class="head">
           <div class="title">ReFrame<small class="site"></small></div>
@@ -130,7 +151,7 @@
 
   const $ = (sel) => root.querySelector(sel);
   const el = {
-    orb: $('.orb'), panel: $('.panel'), site: $('.site'), restore: $('.restore'), more: $('.more'), close: $('.close'),
+    orb: $('.orb'), chatBtn: $('.chat-btn'), caption: $('.caption'), panel: $('.panel'), site: $('.site'), restore: $('.restore'), more: $('.more'), close: $('.close'),
     menu: $('.menu'), who: $('.who'), signout: $('.signout'), hideOrb: $('.hide-orb'),
     auth: $('.auth'), authTitle: $('.auth-title'), nameField: $('.name-field'), err: $('.err'),
     authSubmit: $('.auth-submit'), authToggle: $('.auth-toggle'),
@@ -142,8 +163,115 @@
   let orbHidden = false;
   let authMode = 'signin';
   let working = false;
+  let listening = false;
+  let voiceState = 'idle';
+  let speaking = null;
+  let orbShown = '';
 
   const send = (type, data = {}) => RF.notify(type, data);
+
+  function orbState() {
+    if (listening) return 'listening';
+    if (speaking) return 'speaking';
+    if (voiceState === 'thinking' || view.busy || working) return 'thinking';
+    return 'idle';
+  }
+
+  const ORB_CONTENT = {
+    idle: ICONS.mic,
+    listening: ICONS.mic,
+    thinking: '<span class="orb-dots"><i></i><i></i><i></i></span>',
+    speaking: '<span class="orb-wave"><i></i><i></i><i></i><i></i><i></i></span>',
+  };
+  const ORB_LABEL = { idle: 'Speak to ReFrame', listening: 'Stop listening', thinking: 'Working', speaking: 'Stop speaking' };
+
+  function renderOrb() {
+    const state = orbState();
+    if (state === orbShown) return;
+    orbShown = state;
+    el.orb.dataset.state = state;
+    el.orb.innerHTML = ORB_CONTENT[state];
+    el.orb.setAttribute('aria-label', ORB_LABEL[state]);
+    el.orb.title = ORB_LABEL[state];
+    if (state !== 'listening') el.orb.style.removeProperty('--lvl');
+  }
+
+  // Text spoken so far, taken from the reply itself so punctuation and numbers read as written.
+  function spokenText(elapsed) {
+    const said = speaking.words.filter((w) => w.start <= elapsed).length;
+    const tokens = speaking.text.split(/\s+/).filter(Boolean);
+    if (!speaking.words.length) return elapsed >= speaking.duration ? speaking.text : '';
+    const n = said === speaking.words.length ? tokens.length : Math.round((tokens.length * said) / speaking.words.length);
+    return tokens.slice(0, n).join(' ');
+  }
+
+  function speakFrame(now) {
+    if (!speaking) return;
+    const elapsed = (now - speaking.start) / 1000;
+    if (elapsed > speaking.duration + 0.15) {
+      speaking = null;
+      el.caption.hidden = true;
+      render();
+      return;
+    }
+    const level = speaking.envelope[Math.floor(elapsed / speaking.step)] || 0;
+    const bars = el.orb.querySelectorAll('.orb-wave i');
+    [0.55, 0.8, 1, 0.8, 0.55].forEach((weight, i) => {
+      const wobble = 0.75 + 0.25 * Math.sin(now / 90 + i * 1.7);
+      if (bars[i]) bars[i].style.height = `${6 + level * weight * wobble * 24}px`;
+    });
+    const text = spokenText(elapsed);
+    const target = view.open ? el.msgs.querySelector('.msg.streaming') : el.caption;
+    el.caption.hidden = view.open || !text;
+    if (target && target.textContent !== text) {
+      target.textContent = text;
+      if (view.open) el.msgs.scrollTop = el.msgs.scrollHeight;
+    }
+    requestAnimationFrame(speakFrame);
+  }
+
+  function stopSpeaking() {
+    speaking = null;
+    el.caption.hidden = true;
+    render();
+  }
+
+  function localError(content) {
+    view.chat = [...view.chat, { role: 'error', content }];
+    render();
+  }
+
+  function startListening() {
+    listening = true;
+    render();
+    RF.voice.start({
+      onLevel: (v) => el.orb.style.setProperty('--lvl', v.toFixed(2)),
+      onEnd: (result) => {
+        listening = false;
+        if (result.audio) {
+          voiceState = 'thinking';
+          render();
+          send('rf:voice', { audio: result.audio, mime: result.mime }).then((res) => {
+            if (!res?.error || res.error === 'busy') return;
+            voiceState = 'idle';
+            if (res.fallback) setOpen(true);
+            render();
+          });
+          return;
+        }
+        if (result.error) {
+          setOpen(true);
+          localError(
+            result.error === 'blocked'
+              ? 'The microphone is blocked on this site. Type your request instead.'
+              : "No microphone found. Type your request instead."
+          );
+          return;
+        }
+        render();
+      },
+    });
+  }
   const setLocal = (data) => {
     if (RF.alive()) chrome.storage.local.set(data).catch(() => {});
   };
@@ -164,7 +292,12 @@
       div.textContent = m.content;
       return div;
     });
-    if (view.busy || working) {
+    if (speaking) {
+      const live = document.createElement('div');
+      live.className = 'msg assistant streaming';
+      live.textContent = spokenText((performance.now() - speaking.start) / 1000);
+      nodes.push(live);
+    } else if (view.busy || working) {
       const dots = document.createElement('div');
       dots.className = 'dots';
       dots.innerHTML = '<i></i><i></i><i></i>';
@@ -177,10 +310,11 @@
   function render() {
     const signedIn = Boolean(view.user);
     el.panel.hidden = !view.open;
-    el.orb.hidden = orbHidden && !view.open;
+    el.orb.parentElement.hidden = orbHidden && !view.open;
     el.hideOrb.textContent = orbHidden ? 'Show floating button' : 'Hide floating button';
-    el.orb.setAttribute('aria-expanded', String(view.open));
-    el.orb.classList.toggle('working', view.busy || working);
+    el.chatBtn.setAttribute('aria-expanded', String(view.open));
+    el.chatBtn.setAttribute('aria-label', view.open ? 'Close chat' : 'Open chat');
+    renderOrb();
     // The typing dots always come with the page loader: a reply means the page is about to change.
     RF.showVeil?.(signedIn && (view.busy || working));
     el.site.textContent = location.hostname;
@@ -203,7 +337,16 @@
     if (open) (view.user ? el.input : el.auth.email).focus();
   }
 
-  el.orb.addEventListener('click', () => setOpen(!view.open));
+  el.chatBtn.addEventListener('click', () => setOpen(!view.open));
+  el.orb.addEventListener('click', () => {
+    if (!view.user) return setOpen(true);
+    const state = orbState();
+    if (state === 'listening') RF.voice.stop();
+    else if (state === 'speaking') {
+      stopSpeaking();
+      send('rf:voice-stop');
+    } else if (state === 'idle') startListening();
+  });
   el.close.addEventListener('click', () => setOpen(false));
   el.more.addEventListener('click', () => {
     el.menu.hidden = !el.menu.hidden;
@@ -298,6 +441,23 @@
       working = on;
       render();
     },
+    setVoiceState(state) {
+      voiceState = state === 'thinking' ? 'thinking' : 'idle';
+      render();
+    },
+    speak({ text, words, envelope, step, duration }) {
+      voiceState = 'idle';
+      speaking = {
+        text: String(text || ''),
+        words: Array.isArray(words) ? words : [],
+        envelope: Array.isArray(envelope) ? envelope : [],
+        step: Number(step) || 0.05,
+        duration: Number(duration) || 0,
+        start: performance.now(),
+      };
+      render();
+      requestAnimationFrame(speakFrame);
+    },
     toggle() {
       setOpen(!view.open);
     },
@@ -328,6 +488,7 @@
   });
   remount.observe(document.documentElement, { childList: true });
   RF.teardown = () => {
+    RF.voice?.stop(true);
     remount.disconnect();
     host.remove();
   };

@@ -15,6 +15,7 @@ from .reframer import reframe
 from .schemas import ReframeRequest, ReframeResponse
 from .stdb import SpacetimeClient, SpacetimeError
 from .tracker import Tracker, clear_user_runs
+from .voice import router as voice_router
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("reframe")
@@ -38,6 +39,7 @@ app.add_middleware(
     expose_headers=["Retry-After"],
 )
 app.include_router(auth_router)
+app.include_router(voice_router)
 
 
 @app.exception_handler(RateLimited)

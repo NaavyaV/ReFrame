@@ -1,6 +1,6 @@
 import { ApiError, apiFetch, clearAuth, getAuth, setAuth } from './shared/api.js';
 
-const CONTENT_FILES = ['content/snapshot.js', 'content/apply.js', 'content/widget.js', 'content/main.js'];
+const CONTENT_FILES = ['content/snapshot.js', 'content/apply.js', 'content/voice.js', 'content/widget.js', 'content/main.js'];
 const MAX_CHAT = 60;
 const MAX_CACHE = 40;
 const MAX_AUTO_REBUILDS = 6;
@@ -171,7 +171,91 @@ async function countAutoRebuild(tabId) {
   if (goal) await chrome.storage.session.set({ [key]: { ...goal, autoRebuilds: (goal.autoRebuilds || 0) + 1 } });
 }
 
-async function runReframe(tabId, text, { continuation = false } = {}) {
+// ---------- voice ----------
+
+const keysVoice = (tabId) => `voice:${tabId}`;
+const speechEnds = new Map();
+const currentSpeech = new Map();
+let speechSeq = 0;
+
+const isVoiceMode = async (tabId) => Boolean(await getSession(keysVoice(tabId)));
+const setVoiceMode = (tabId, on) =>
+  on ? chrome.storage.session.set({ [keysVoice(tabId)]: true }) : chrome.storage.session.remove(keysVoice(tabId));
+const setVoiceState = (tabId, state) => chrome.tabs.sendMessage(tabId, { type: 'rf:voice-state', state }).catch(() => {});
+
+async function ensureOffscreen() {
+  if (await chrome.offscreen.hasDocument()) return;
+  await chrome.offscreen
+    .createDocument({ url: 'offscreen.html', reasons: ['AUDIO_PLAYBACK'], justification: 'Speak replies aloud' })
+    .catch(() => {});
+}
+
+async function stopSpeech(tabId) {
+  if (!currentSpeech.has(tabId)) return;
+  currentSpeech.delete(tabId);
+  if (await chrome.offscreen.hasDocument()) await chrome.runtime.sendMessage({ target: 'offscreen', type: 'stop' }).catch(() => {});
+}
+
+async function handleVoice(tabId, audio, mime) {
+  if (busyTabs.has(tabId)) return { error: 'busy' };
+  const auth = await getAuth();
+  if (!auth?.token) return { error: 'signed-out' };
+  await stopSpeech(tabId);
+  setVoiceState(tabId, 'thinking');
+  let text = '';
+  try {
+    ({ text } = await apiFetch('/voice/transcribe', { method: 'POST', token: auth.token, body: { audio, mime } }));
+  } catch (err) {
+    setVoiceState(tabId, 'idle');
+    if (err instanceof ApiError && err.status === 401) await clearAuth();
+    await pushChat(tabId, { role: 'error', content: "Voice isn't working right now. Type your request instead." });
+    return { error: 'voice', fallback: true };
+  }
+  if (!text) {
+    setVoiceState(tabId, 'idle');
+    return { error: 'empty' };
+  }
+  await setVoiceMode(tabId, true);
+  return handleChat(tabId, text, { spoken: true });
+}
+
+// Plays the reply in the offscreen document and streams its words to the page; the chat keeps the full text.
+async function speakReply(tabId, text, speechPromise) {
+  setVoiceState(tabId, 'thinking');
+  const id = ++speechSeq;
+  currentSpeech.set(tabId, id);
+  let speech = null;
+  try {
+    speech = await speechPromise;
+    await ensureOffscreen();
+    const played = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'play', id, audio: speech.audio });
+    if (!played?.ok) speech = null;
+  } catch {
+    speech = null;
+  }
+  if (speech && currentSpeech.get(tabId) === id) {
+    chrome.tabs
+      .sendMessage(tabId, {
+        type: 'rf:speak',
+        text,
+        words: speech.words,
+        envelope: speech.envelope,
+        step: speech.envelope_step,
+        duration: speech.duration,
+      })
+      .catch(() => {});
+    await new Promise((resolve) => {
+      speechEnds.set(id, resolve);
+      setTimeout(resolve, speech.duration * 1000 + 1500);
+    });
+    speechEnds.delete(id);
+  }
+  if (currentSpeech.get(tabId) === id) currentSpeech.delete(tabId);
+  await pushChat(tabId, { role: 'assistant', content: text });
+  if (!currentSpeech.has(tabId)) setVoiceState(tabId, 'idle');
+}
+
+async function runReframe(tabId, text, { continuation = false, spoken = false } = {}) {
   const auth = await getAuth();
   if (!auth?.token) throw new ApiError('Signed out.', 401);
 
@@ -188,16 +272,26 @@ async function runReframe(tabId, text, { continuation = false } = {}) {
     res = await apiFetch('/reframe', {
       method: 'POST',
       token: auth.token,
-      body: { message: text, snapshot, history: continuation ? [] : history, applied, continuation },
+      body: { message: text, snapshot, history: continuation ? [] : history, applied, continuation, spoken },
     });
     if (res.operations?.length) await cachePut(cacheKey, res);
   }
   if ((restoreGen.get(tabId) || 0) !== gen) return { ok: false, restored: true };
+  // In voice mode the reply is synthesized while the page changes, then spoken.
+  const speech =
+    res.reply && (await isVoiceMode(tabId))
+      ? apiFetch('/voice/speak', { method: 'POST', token: auth.token, body: { text: res.reply.slice(0, 600) } })
+      : null;
+  speech?.catch(() => {});
   const ops = res.operations || [];
   await chrome.tabs.sendMessage(tabId, { type: 'rf:apply', ops });
   await chrome.storage.session.set({ [keys(tabId).busy]: false });
   await updateGoal(tabId, text, res, continuation, snapshot.url);
-  await pushChat(tabId, { role: 'assistant', content: res.reply });
+  if (speech) speakReply(tabId, res.reply, speech);
+  else {
+    await pushChat(tabId, { role: 'assistant', content: res.reply });
+    if (spoken) setVoiceState(tabId, 'idle');
+  }
   return { ok: true };
 }
 
@@ -208,6 +302,7 @@ async function withBusy(tabId, fn, { onLimit } = {}) {
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) await clearAuth();
     chrome.tabs.sendMessage(tabId, { type: 'rf:pending', on: false }).catch(() => {});
+    setVoiceState(tabId, 'idle');
     if (err instanceof ApiError && err.status === 429) {
       cooldownUntil = Date.now() + err.retryAfter * 1000;
       if (onLimit) return onLimit(err);
@@ -221,14 +316,19 @@ async function withBusy(tabId, fn, { onLimit } = {}) {
   }
 }
 
-async function handleChat(tabId, text) {
+async function handleChat(tabId, text, { spoken = false } = {}) {
   if (busyTabs.has(tabId)) return { error: 'busy' };
+  if (!spoken) {
+    await setVoiceMode(tabId, false);
+    await stopSpeech(tabId);
+  }
   const wait = cooldownLeft();
   if (wait) {
+    setVoiceState(tabId, 'idle');
     await pushChat(tabId, { role: 'error', content: `Please wait ${wait} seconds and try again.` });
     return { error: 'cooldown' };
   }
-  return withBusy(tabId, () => runReframe(tabId, text));
+  return withBusy(tabId, () => runReframe(tabId, text, { spoken }));
 }
 
 // ---------- following the user across pages ----------
@@ -319,7 +419,8 @@ async function onRestored(tabId) {
   clearTimeout(debounceTimers.get(tabId));
   pendingRebuild.delete(tabId);
   retriedRebuild.delete(tabId);
-  await chrome.storage.session.remove([keys(tabId).goal, keys(tabId).chat]);
+  await chrome.storage.session.remove([keys(tabId).goal, keys(tabId).chat, keysVoice(tabId)]);
+  await stopSpeech(tabId);
   await broadcast(tabId);
   const auth = await getAuth();
   if (auth?.token) apiFetch('/tracker/clear', { method: 'POST', token: auth.token }).catch(() => {});
@@ -425,6 +526,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // ---------- messages from content scripts ----------
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === 'rf:speech-ended') {
+    speechEnds.get(msg.id)?.();
+    return false;
+  }
   const tabId = sender.tab?.id;
   if (tabId === undefined) return false;
   flagIfEdited();
@@ -434,6 +539,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     case 'rf:chat':
       handleChat(tabId, String(msg.text || '').slice(0, 1000)).then(sendResponse);
+      return true;
+    case 'rf:voice':
+      handleVoice(tabId, String(msg.audio || ''), String(msg.mime || 'audio/webm')).then(sendResponse);
+      return true;
+    case 'rf:voice-stop':
+      stopSpeech(tabId).then(() => sendResponse({ ok: true }));
       return true;
     case 'rf:login':
       authenticate('/auth/login', { email: msg.email, password: msg.password }).then(sendResponse);

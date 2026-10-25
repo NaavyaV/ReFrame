@@ -111,7 +111,11 @@ function renderNow(run: AgentRun | undefined) {
       { class: 'who-line' },
       h('span', { class: 'avatar', 'aria-hidden': 'true' }, initials(run.userName)),
       h('span', { class: 'name' }, run.userName),
-      h('span', { class: 'src' }, run.source === 'auto' ? 'Followed to the next page' : 'Typed a request'),
+      h(
+        'span',
+        { class: 'src' },
+        run.source === 'auto' ? 'Followed to the next page' : run.source === 'voice' ? 'Spoke a request' : 'Typed a request'
+      ),
       h('span', { class: 'page' }, pagePath(run.pageUrl))
     ),
     h('blockquote', { class: 'prompt' }, run.prompt),
