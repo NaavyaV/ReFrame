@@ -37,10 +37,15 @@
       backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);display:grid;place-items:center;opacity:.45;transition:opacity .2s}
     .orb-row:hover .chat-btn,.chat-btn:focus-visible,.chat-btn[aria-expanded="true"]{opacity:1}
     .chat-btn svg{width:13px;height:13px}
-    .caption{max-width:min(340px,calc(100vw - 64px));padding:12px 16px;border-radius:16px;font-size:17px;line-height:1.45;
-      background:rgba(16,19,28,.86);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
-      border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 32px rgba(0,0,0,.3);animation:pop .16s ease-out}
-    .caption.heard{color:rgba(244,246,251,.8);font-style:italic}
+    .caption{max-width:min(510px,calc(100vw - 64px));padding:16px 20px;border-radius:20px;font-size:25.5px;line-height:1.4;
+      background:rgba(16,19,28,.86);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);display:flex;gap:12px;
+      align-items:flex-start;border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 32px rgba(0,0,0,.3);animation:pop .16s ease-out}
+    .caption-text{margin:0;flex:1}
+    .caption-x{display:none;flex:none;width:32px;height:32px;margin:2px -6px 0 0;border:0;border-radius:50%;padding:7px;cursor:pointer;
+      background:rgba(255,255,255,.1);color:#fff}
+    .caption-x:hover{background:rgba(255,255,255,.2)}
+    .caption-x svg{display:block;width:18px;height:18px}
+    .caption.done .caption-x{display:block}
     .panel{width:min(370px,calc(100vw - 56px));height:min(540px,calc(100vh - 170px));display:flex;flex-direction:column;
       background:rgba(16,19,28,.84);backdrop-filter:blur(22px) saturate(1.5);-webkit-backdrop-filter:blur(22px) saturate(1.5);
       border:1px solid rgba(255,255,255,.12);border-radius:20px;box-shadow:0 24px 60px rgba(0,0,0,.38);overflow:hidden;
@@ -119,7 +124,10 @@
         <button class="chat-btn" aria-label="Open chat" title="Chat" aria-expanded="false">${ICONS.more}</button>
         <button class="orb" aria-label="Speak to ReFrame" title="Speak" data-state="idle">${ICONS.mic}</button>
       </div>
-      <div class="caption" aria-live="polite" hidden></div>
+      <div class="caption" hidden>
+        <p class="caption-text" aria-live="polite"></p>
+        <button class="caption-x" aria-label="Close" title="Close">${ICONS.close}</button>
+      </div>
       <section class="panel" role="dialog" aria-label="ReFrame" hidden>
         <div class="head">
           <div class="title">ReFrame<small class="site"></small></div>
@@ -159,7 +167,7 @@
   const $ = (sel) => root.querySelector(sel);
   const el = {
     hush: $('.hush'), heardLive: $('.heard-live'),
-    orb: $('.orb'), chatBtn: $('.chat-btn'), caption: $('.caption'), panel: $('.panel'), site: $('.site'), restore: $('.restore'), more: $('.more'), close: $('.close'),
+    orb: $('.orb'), chatBtn: $('.chat-btn'), caption: $('.caption'), captionText: $('.caption-text'), captionX: $('.caption-x'), panel: $('.panel'), site: $('.site'), restore: $('.restore'), more: $('.more'), close: $('.close'),
     menu: $('.menu'), who: $('.who'), signout: $('.signout'), hideOrb: $('.hide-orb'),
     auth: $('.auth'), authTitle: $('.auth-title'), nameField: $('.name-field'), err: $('.err'),
     authSubmit: $('.auth-submit'), authToggle: $('.auth-toggle'),
@@ -217,9 +225,7 @@
     if (!speaking) return;
     const elapsed = (now - speaking.start) / 1000;
     if (elapsed > speaking.duration + 0.15) {
-      speaking = null;
-      el.caption.hidden = true;
-      render();
+      stopSpeaking();
       return;
     }
     const level = speaking.envelope[Math.floor(elapsed / speaking.step)] || 0;
@@ -229,18 +235,29 @@
       if (bars[i]) bars[i].style.height = `${6 + level * weight * wobble * 24}px`;
     });
     const text = spokenText(elapsed);
-    const target = view.open ? el.msgs.querySelector('.msg.streaming') : el.caption;
-    el.caption.hidden = view.open || !text;
-    if (target && target.textContent !== text) {
-      target.textContent = text;
-      if (view.open) el.msgs.scrollTop = el.msgs.scrollHeight;
+    if (view.open) {
+      const bubble = el.msgs.querySelector('.msg.streaming');
+      if (bubble && bubble.textContent !== text) {
+        bubble.textContent = text;
+        el.msgs.scrollTop = el.msgs.scrollHeight;
+      }
+    } else if (el.captionText.textContent !== text) {
+      showCaption(text, false);
     }
     requestAnimationFrame(speakFrame);
   }
 
+  function showCaption(text, done) {
+    el.captionText.textContent = text;
+    el.caption.classList.toggle('done', done);
+    el.caption.hidden = view.open || !text;
+  }
+
+  // The full reply stays on screen after speaking ends (or is cut short) until it is closed.
   function stopSpeaking() {
+    const text = speaking?.text || '';
     speaking = null;
-    el.caption.hidden = true;
+    showCaption(text, true);
     render();
   }
 
@@ -256,6 +273,7 @@
 
   function startListening() {
     listening = true;
+    el.caption.hidden = true;
     showHeard('');
     render();
     RF.voice.start({
@@ -330,6 +348,7 @@
     el.chatBtn.setAttribute('aria-expanded', String(view.open));
     el.chatBtn.setAttribute('aria-label', view.open ? 'Close chat' : 'Open chat');
     renderOrb();
+    if (view.open) el.caption.hidden = true;
     el.hush.classList.toggle('on', listening);
     // The typing dots always come with the page loader: a reply means the page is about to change.
     RF.showVeil?.(signedIn && (view.busy || working));
@@ -355,6 +374,9 @@
 
   el.chatBtn.addEventListener('click', () => setOpen(!view.open));
   el.hush.addEventListener('click', () => RF.voice.stop());
+  el.captionX.addEventListener('click', () => {
+    el.caption.hidden = true;
+  });
   el.orb.addEventListener('click', () => {
     if (!view.user) return setOpen(true);
     const state = orbState();
