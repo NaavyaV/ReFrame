@@ -177,6 +177,7 @@
         } else if (n === 'data-rf-confirm' || n === 'data-rf-primary') el.setAttribute(n, '1');
         else if (n === 'data-rf-each' && /^r\d{1,5}-r\d{1,5}$/.test(value)) el.setAttribute(n, value);
         else if (n === 'data-rf-class') el.setAttribute(n, value.replace(/[^\w\s-]/g, '').slice(0, 120));
+        else if (n === 'data-rf-format' && tag === 'INPUT' && value in FORMATS) el.setAttribute(n, value);
         else if (n === 'id' || n === 'for') el.setAttribute(n, `rf-${value.replace(/[^\w-]/g, '').slice(0, 40)}`);
         else if (n === 'type' && tag === 'INPUT') el.setAttribute('type', INPUT_TYPES.test(value) ? value : 'text');
         else if (['placeholder', 'title', 'alt'].includes(n)) el.setAttribute(n, value.slice(0, 200));
@@ -202,6 +203,45 @@
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
+  const digits = (v, max) => v.replace(/\D/g, '').slice(0, max);
+  const FORMATS = {
+    card: {
+      max: 19,
+      format: (v) => digits(v, 16).replace(/(\d{4})(?=\d)/g, '$1 '),
+      complete: (v) => /^\d{4} \d{4} \d{4} \d{4}$/.test(v),
+    },
+    exp: {
+      max: 5,
+      format: (v) => {
+        let d = digits(v, 4);
+        if (d.length === 1 && d > '1') d = `0${d}`;
+        if (d.length >= 2 && !/^(0[1-9]|1[0-2])$/.test(d.slice(0, 2))) d = d[0];
+        return d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d;
+      },
+      complete: (v) => {
+        const m = /^(0[1-9]|1[0-2])\/(\d{2})$/.exec(v);
+        if (!m) return false;
+        const now = new Date();
+        const yy = now.getFullYear() % 100;
+        return +m[2] > yy || (+m[2] === yy && +m[1] >= now.getMonth() + 1);
+      },
+    },
+    cvv: { max: 3, format: (v) => digits(v, 3), complete: (v) => /^\d{3}$/.test(v) },
+  };
+
+  // Formatted boxes must be complete before the main button presses the real control.
+  function formatsComplete(node) {
+    const scope = node.closest('[data-reframe-root]') || node.parentElement;
+    const bad = [...(scope?.querySelectorAll('input[data-rf-format]') || [])].filter(
+      (input) => !FORMATS[input.getAttribute('data-rf-format')].complete(input.value)
+    );
+    for (const input of scope?.querySelectorAll('input[data-rf-format]') || []) {
+      input.setAttribute('aria-invalid', String(bad.includes(input)));
+    }
+    bad[0]?.focus();
+    return !bad.length;
+  }
+
   function pressElement(target) {
     const opts = { bubbles: true, cancelable: true, view: window };
     try {
@@ -221,6 +261,7 @@
       RF.notifyPageChanged?.('missing');
       return;
     }
+    if (node.hasAttribute('data-rf-primary') && !formatsComplete(node)) return;
     if (node.hasAttribute('data-rf-confirm')) {
       const label = (node.innerText || node.textContent || '').trim().slice(0, 80) || 'Continue?';
       if (!(await RF.ui.confirm(label))) return;
@@ -268,12 +309,24 @@
       if (tag === 'INPUT' && target.type === 'password') control.type = 'password';
       const ac = target.getAttribute('autocomplete');
       if (ac) control.setAttribute('autocomplete', ac);
-      control.value = target.value || '';
-      control.addEventListener('input', () => setNativeValue(target, control.value));
+      const fmt = FORMATS[control.getAttribute('data-rf-format')];
+      if (fmt) {
+        control.setAttribute('inputmode', 'numeric');
+        control.maxLength = fmt.max;
+      }
+      control.value = fmt ? fmt.format(target.value || '') : target.value || '';
+      control.addEventListener('input', () => {
+        if (fmt) {
+          control.value = fmt.format(control.value);
+          control.removeAttribute('aria-invalid');
+        }
+        setNativeValue(target, control.value);
+      });
       if (tag === 'INPUT' && target.form) {
         control.addEventListener('keydown', async (e) => {
           if (e.key !== 'Enter') return;
           e.preventDefault();
+          if (!formatsComplete(control)) return;
           if (await RF.ui.confirm('Submit this form?')) {
             target.form.requestSubmit ? target.form.requestSubmit() : target.form.submit();
             RF.afterAction?.();

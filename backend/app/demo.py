@@ -27,6 +27,11 @@ CSS = """
   background:#0b4f8a;color:#fff;text-align:center;cursor:pointer;box-shadow:0 6px 0 #073a66}
 .rf-big:hover{background:#0d5ea3}
 .rf-big:active{box-shadow:none}
+.rf-big:focus-visible{outline:4px solid #f2a900;outline-offset:4px}
+.rf-pay{background:#1e7a46;box-shadow:0 6px 0 #145732}
+.rf-pay:hover{background:#228c50}
+.rf-demo input[aria-invalid="true"]{border:3px solid #b3261e;background:#fff5f4;outline-color:#b3261e}
+.rf-hint{display:block;font-size:18px;font-weight:normal;color:#5a6b7b;margin-top:2px}
 .rf-demo label{display:block;font-size:22px;font-weight:bold;margin:0 0 8px}
 .rf-demo input{display:block;width:100%;font-size:28px;padding:16px 18px;border:2px solid #8a99a8;border-radius:12px;
   margin:0 0 24px;color:#1d2a36;background:#fff}
@@ -76,13 +81,13 @@ def _step(req: ReframeRequest) -> ReframeResponse | None:
     page = _page(s.url)
     page_text = " ".join(e.text or "" for e in els)
 
-    if page == "pay" and "Payment submitted" in page_text:
+    if page == "confirmation":
         confirmation = (re.search(r"BG-\d+", page_text) or ["BG-20491"])[0]
         home = _link(els, "index")
         if not home:
             return None
         return ReframeResponse(
-            reply=f"Your payment went through — confirmation {confirmation}. You're good to go, nothing else to do!",
+            reply=f"I found your receipt under all the ads — confirmation {confirmation}. You're good to go, nothing else to do!",
             operations=[_render(
                 '<div class="rf-demo rf-center"><div class="rf-check">✓</div>'
                 "<h2>Payment submitted!</h2>"
@@ -103,14 +108,16 @@ def _step(req: ReframeRequest) -> ReframeResponse | None:
             operations=[_render(
                 '<div class="rf-demo"><p class="rf-kicker">Step 3 of 3</p><h2>Enter your card</h2>'
                 "<p>You are paying <b>$84.12</b> to BrightGrid.</p>"
-                f'<label for="card">Card number</label><input id="card" data-rf-bind="{card.ref}" placeholder="1234 5678 9012 3456">'
+                f'<label for="card">Card number<span class="rf-hint">16 digits</span></label>'
+                f'<input id="card" data-rf-bind="{card.ref}" data-rf-format="card" placeholder="1234 5678 9012 3456">'
                 '<div class="rf-two">'
-                f'<div><label for="exp">Expiration (MM/YY)</label><input id="exp" data-rf-bind="{exp.ref}" placeholder="MM/YY"></div>'
-                f'<div><label for="cvv">Security code</label><input id="cvv" data-rf-bind="{cvv.ref}" placeholder="3 digits"></div>'
+                f'<div><label for="exp">Expiration<span class="rf-hint">MM/YY</span></label>'
+                f'<input id="exp" data-rf-bind="{exp.ref}" data-rf-format="exp" placeholder="MM/YY"></div>'
+                f'<div><label for="cvv">Security code<span class="rf-hint">3 digits on the back</span></label>'
+                f'<input id="cvv" data-rf-bind="{cvv.ref}" data-rf-format="cvv" placeholder="123"></div>'
                 "</div>"
-                f'<button class="rf-big" data-rf-target="{submit.ref}" data-rf-primary="1" data-rf-confirm="1">Submit payment</button></div>'
+                f'<button class="rf-big rf-pay" data-rf-target="{submit.ref}" data-rf-primary="1">Submit payment</button></div>'
             )],
-            done=True,
         )
 
     if page == "billing":
@@ -125,7 +132,6 @@ def _step(req: ReframeRequest) -> ReframeResponse | None:
                 '<div class="rf-fact"><span>Due date</span><b>Nov 3, 2026</b></div></div>'
                 f'<button class="rf-big" data-rf-target="{pay.ref}" data-rf-primary="1">Make a one-time payment</button></div>'
             )],
-            done=True,
         )
 
     if page == "index":
@@ -140,7 +146,6 @@ def _step(req: ReframeRequest) -> ReframeResponse | None:
                 "<p>It is due on <b>November 3</b>. When you're ready, press the big button below.</p>"
                 f'<button class="rf-big" data-rf-target="{billing.ref}" data-rf-primary="1">Check payment options</button></div>'
             )],
-            done=True,
         )
     return None
 

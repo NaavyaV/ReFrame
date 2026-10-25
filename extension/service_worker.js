@@ -110,6 +110,8 @@ async function cachePut(key, res) {
 
 // The BrightGrid demo site gets a scripted walkthrough from the server; show the page loader while it builds.
 const DEMO_HOSTS = ['127.0.0.1:5173', 'localhost:5173', 'reframe-demo.pages.dev'];
+// On the demo site the original page stays visible this long before the loader covers it.
+const DEMO_REVEAL_MS = 900;
 
 function isDemoSite(url) {
   try {
@@ -179,7 +181,7 @@ async function runReframe(tabId, text, { continuation = false } = {}) {
   const gen = restoreGen.get(tabId) || 0;
   const { snapshot, applied } = await snapshotTab(tabId);
   const cacheKey = `${text}|${signature(snapshot)}`;
-  let res = continuation ? await cacheGet(cacheKey) : null;
+  let res = continuation && !isDemoSite(snapshot.url) ? await cacheGet(cacheKey) : null;
   if (!res) {
     if (continuation) await countAutoRebuild(tabId);
     else if (isDemoSite(snapshot.url)) chrome.tabs.sendMessage(tabId, { type: 'rf:pending', on: true }).catch(() => {});
@@ -250,6 +252,8 @@ async function continueGoal(tabId) {
     pendingRebuild.add(tabId);
     return;
   }
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (tab && isDemoSite(tab.url)) await new Promise((r) => setTimeout(r, DEMO_REVEAL_MS));
   chrome.tabs.sendMessage(tabId, { type: 'rf:pending', on: true }).catch(() => {});
   await withBusy(tabId, () => runReframe(tabId, goal.message, { continuation: true }), {
     // An automatic rebuild that hits a limit retries once, quietly, instead of posting an error.
@@ -278,7 +282,8 @@ async function onHello(tabId) {
   const auth = await getAuth();
   const pending = Boolean(auth?.token) && (await shouldContinue(tabId, goal));
   if (pending) schedulePageChange(tabId, 0);
-  return { state: await tabState(tabId), pageStyle: goal?.pageStyle || null, pending };
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  return { state: await tabState(tabId), pageStyle: goal?.pageStyle || null, pending: pending && !isDemoSite(tab?.url) };
 }
 
 // ---------- auth ----------
