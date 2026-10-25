@@ -7,7 +7,13 @@
     :host{all:initial}
     *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
     [hidden]{display:none!important}
-    .dock{position:fixed;top:32px;right:32px;display:flex;flex-direction:column;align-items:flex-end;gap:10px;
+    .hush{position:fixed;inset:0;z-index:0;background:rgba(4,6,10,.82);opacity:0;pointer-events:none;transition:opacity .25s;
+      display:flex;align-items:center;justify-content:center;padding:120px 48px}
+    .hush.on{opacity:1;pointer-events:auto}
+    .heard-live{max-width:min(900px,100%);color:#fff;font-size:clamp(26px,3.4vw,42px);line-height:1.35;font-weight:600;
+      text-align:center;text-wrap:balance}
+    .heard-live.waiting{color:rgba(255,255,255,.55);font-weight:500}
+    .dock{position:fixed;z-index:1;top:32px;right:32px;display:flex;flex-direction:column;align-items:flex-end;gap:10px;
       color:#f4f6fb;font-size:15px;line-height:1.45}
     .orb-row{position:relative}
     .orb{width:64px;height:64px;border-radius:50%;border:1.5px solid rgba(143,176,255,.55);cursor:pointer;color:#fff;
@@ -107,6 +113,7 @@
   // Static markup only; every dynamic string below goes through textContent.
   root.innerHTML = `
     <style>${CSS}</style>
+    <div class="hush" aria-hidden="true"><p class="heard-live" aria-live="polite"></p></div>
     <div class="dock">
       <div class="orb-row">
         <button class="chat-btn" aria-label="Open chat" title="Chat" aria-expanded="false">${ICONS.more}</button>
@@ -151,6 +158,7 @@
 
   const $ = (sel) => root.querySelector(sel);
   const el = {
+    hush: $('.hush'), heardLive: $('.heard-live'),
     orb: $('.orb'), chatBtn: $('.chat-btn'), caption: $('.caption'), panel: $('.panel'), site: $('.site'), restore: $('.restore'), more: $('.more'), close: $('.close'),
     menu: $('.menu'), who: $('.who'), signout: $('.signout'), hideOrb: $('.hide-orb'),
     auth: $('.auth'), authTitle: $('.auth-title'), nameField: $('.name-field'), err: $('.err'),
@@ -241,11 +249,18 @@
     render();
   }
 
+  function showHeard(text) {
+    el.heardLive.textContent = text || 'Listening…';
+    el.heardLive.classList.toggle('waiting', !text);
+  }
+
   function startListening() {
     listening = true;
+    showHeard('');
     render();
     RF.voice.start({
       onLevel: (v) => el.orb.style.setProperty('--lvl', v.toFixed(2)),
+      onText: showHeard,
       onEnd: (result) => {
         listening = false;
         if (result.audio) {
@@ -315,6 +330,7 @@
     el.chatBtn.setAttribute('aria-expanded', String(view.open));
     el.chatBtn.setAttribute('aria-label', view.open ? 'Close chat' : 'Open chat');
     renderOrb();
+    el.hush.classList.toggle('on', listening);
     // The typing dots always come with the page loader: a reply means the page is about to change.
     RF.showVeil?.(signedIn && (view.busy || working));
     el.site.textContent = location.hostname;
@@ -338,6 +354,7 @@
   }
 
   el.chatBtn.addEventListener('click', () => setOpen(!view.open));
+  el.hush.addEventListener('click', () => RF.voice.stop());
   el.orb.addEventListener('click', () => {
     if (!view.user) return setOpen(true);
     const state = orbState();

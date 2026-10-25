@@ -19,8 +19,26 @@
       reader.readAsDataURL(blob);
     });
 
+  // Live words for the screen only, from Chrome's built-in recognizer; the request text comes from Cartesia.
+  function liveWords(onText) {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition || !onText) return null;
+    const recognizer = new Recognition();
+    recognizer.continuous = true;
+    recognizer.interimResults = true;
+    recognizer.lang = navigator.language || 'en-US';
+    recognizer.onresult = (e) => onText([...e.results].map((r) => r[0].transcript).join('').trim());
+    recognizer.onerror = () => {};
+    try {
+      recognizer.start();
+    } catch {
+      return null;
+    }
+    return recognizer;
+  }
+
   // Records until the speaker goes quiet (or stop() is called); onEnd gets the audio, or why there is none.
-  async function start({ onLevel, onEnd }) {
+  async function start({ onLevel, onText, onEnd }) {
     if (rec) return;
     let stream;
     try {
@@ -50,6 +68,7 @@
     let lastVoice = t0;
     let cancelled = false;
     let timer = 0;
+    const recognizer = liveWords(onText);
 
     rec = {
       stop(cancel = false) {
@@ -60,6 +79,9 @@
 
     recorder.onstop = async () => {
       clearInterval(timer);
+      try {
+        recognizer?.abort();
+      } catch {}
       stream.getTracks().forEach((t) => t.stop());
       ctx.close().catch(() => {});
       rec = null;
