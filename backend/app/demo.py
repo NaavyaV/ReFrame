@@ -6,9 +6,13 @@ Only applies to the demo hosts below; every other site goes through the model.
 import asyncio
 import random
 import re
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from .schemas import ReframeRequest, ReframeResponse, RenderOp, SnapElement
+
+if TYPE_CHECKING:
+    from .tracker import Tracker
 
 DEMO_HOSTS = {"127.0.0.1:5173", "localhost:5173", "reframe-demo.pages.dev"}
 DEMO_HOST_SUFFIX = ".reframe-demo.pages.dev"
@@ -150,8 +154,69 @@ def _step(req: ReframeRequest) -> ReframeResponse | None:
     return None
 
 
-async def demo_reframe(req: ReframeRequest) -> ReframeResponse | None:
+# What the tracker shows while each step "works": (kind, target, detail). Alerts are ("alert", severity, title, detail).
+TIMELINES: dict[str, list[tuple[str, str, str, str]]] = {
+    "index": [
+        ("scan", "Home page", "212 elements, 9 pop-ups and banners", "Reading the page"),
+        ("remove", "Cookie banner", "covered the bottom of the screen", "Removing clutter"),
+        ("remove", "Maintenance alert strip", "moved to the payment step", "Removing clutter"),
+        ("remove", "Promo carousel", "3 rotating ads", "Removing clutter"),
+        ("alert", "info", "Bill due in 10 days", "$84.12 due Nov 3, 2026"),
+        ("remove", "Ways to save, outage map, events, FAQ", "4 sections", "Removing clutter"),
+        ("remove", "Footer", "25 links", "Removing clutter"),
+        ("keep", "Amount due", "$84.12", "Rebuilding the layout"),
+        ("change", "Pay link", "13px link → large \"Check payment options\" button", "Rebuilding the layout"),
+        ("change", "Text size", "13px → 24px", "Rebuilding the layout"),
+    ],
+    "billing": [
+        ("scan", "Account Center", "64 elements, 1 pop-up", "Reading the page"),
+        ("remove", "Survey pop-up", "was blocking the page", "Removing clutter"),
+        ("alert", "info", "Pop-up closed", "\"How are we doing?\" survey blocked the payment buttons"),
+        ("remove", "Sidebar", "6 account links", "Removing clutter"),
+        ("remove", "Recent activity table", "not needed to pay", "Removing clutter"),
+        ("remove", "AutoPay promo", "advert", "Removing clutter"),
+        ("keep", "Balance and due date", "$84.12 · Nov 3, 2026", "Rebuilding the layout"),
+        ("change", "One-time payment tile", "small tile → large button", "Rebuilding the layout"),
+    ],
+    "pay": [
+        ("scan", "Payment form", "4 fields, 2 sidebars", "Reading the page"),
+        ("alert", "info", "Card fields found", "Values stay on this device; only labels are tracked"),
+        ("remove", "Sidebars", "payment locations, promo", "Removing clutter"),
+        ("alert", "warning", "Maintenance Sat 11/1, 1–5 AM", "Online payments may be delayed during that window"),
+        ("remove", "Maintenance strip", "flagged as an alert", "Removing clutter"),
+        ("keep", "Card number, expiration, security code", "bound to the real form", "Rebuilding the layout"),
+        ("change", "Inputs", "11px → 28px, card formats enforced", "Rebuilding the layout"),
+        ("change", "Submit payment", "small link-style button → large green button", "Rebuilding the layout"),
+    ],
+    "confirmation": [
+        ("scan", "Payment status page", "41 elements, 1 pop-up, 3 ads", "Reading the page"),
+        ("remove", "Feedback pop-up", "\"How easy was it to pay today?\"", "Removing clutter"),
+        ("remove", "Upsell tiles", "7 offers", "Removing clutter"),
+        ("alert", "warning", "Card convenience fee may apply", "Fine print: tariff schedule 14-B"),
+        ("keep", "Confirmation number", "found in 11px fine print", "Rebuilding the layout"),
+        ("change", "Receipt", "fine print → large confirmation", "Rebuilding the layout"),
+    ],
+}
+
+
+async def demo_reframe(req: ReframeRequest, tracker: "Tracker | None" = None) -> ReframeResponse | None:
     result = _step(req)
-    if result is not None:
-        await asyncio.sleep(random.uniform(1.5, 2.5))
+    if result is None:
+        return None
+    total = random.uniform(1.5, 2.5)
+    timeline = TIMELINES.get(_page(req.snapshot.url), [])
+    if tracker is None or not timeline:
+        await asyncio.sleep(total)
+        return result
+    tracker.start()
+    gap = total / (len(timeline) + 1)
+    for i, (kind, a, b, c) in enumerate(timeline, 1):
+        await asyncio.sleep(gap)
+        if kind == "alert":
+            tracker.alert(a, b, c)
+        else:
+            tracker.event(kind, a, b, c, int(90 * i / len(timeline)))
+    await asyncio.sleep(gap)
+    tracker.finish("done", result.reply)
+    await tracker.flush()
     return result

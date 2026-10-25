@@ -20,8 +20,9 @@ Simple visual requests (bigger/smaller text, dark mode, high contrast, hide imag
 | --- | --- |
 | `extension/` | Chrome MV3 extension (content scripts, service worker, widget) |
 | `backend/` | FastAPI server: auth, `/reframe`, Groq calls |
-| `spacetime/` | SpacetimeDB module storing user accounts |
-| `demo-site/` | Static utility-company site for testing |
+| `spacetime/` | SpacetimeDB module: user accounts and the live agent tracker tables |
+| `demo-site/` | Static utility-company site for testing ([reframe-demo.pages.dev](https://reframe-demo.pages.dev)) |
+| `tracker/` | Live tracker page ([reframe-tracker.pages.dev](https://reframe-tracker.pages.dev)) |
 | `docs/BUILD_PLAN.md` | Phased build plan |
 
 ## Requirements
@@ -105,9 +106,31 @@ The extension talks to `http://localhost:8000` by default, so keep the backend r
    - "Hide the ads"
 5. Press **Restore** to undo everything on the page.
 
+## Live tracker
+
+Every request writes its progress to SpacetimeDB under the ReFrame user's id and name: what was asked, what the agent read, removed, changed and kept, the reply, and any alerts. The tracker page subscribes to those tables and updates as it happens. Filter by user with the menu, or link to `?user=<user id>`.
+
+| Table | One row per |
+| --- | --- |
+| `agent_run` | request, including automatic rebuilds on the next page: status, step, progress, counts, reply |
+| `agent_event` | thing the agent did: `request`, `scan`, `remove`, `change`, `keep`, `reply` |
+| `agent_alert` | flag raised during a run: `info`, `warning` or `critical` |
+
+The tables are public so the page can read them without signing in. They hold labels and counts only, never field values or email addresses. Only the backend (the database admin) can write to them.
+
+```bash
+cd tracker
+npm install
+npm run dev        # http://localhost:5173 (stop the demo site first, or use --port)
+npm run generate   # after changing the SpacetimeDB module
+npm run deploy     # build and publish to Cloudflare Pages
+```
+
+On the demo site the steps, alerts and timings are scripted.
+
 ## Update the extension after code changes
 
-- Extension code: click the reload icon on ReFrame in `chrome://extensions`, then refresh open tabs.
+- Extension code: click the reload icon on ReFrame in `chrome://extensions`, then refresh open tabs. A red ↻ on the toolbar icon means the files changed since the last reload.
 - Backend code: reloads automatically with `--reload`.
 
 ## Rate limits

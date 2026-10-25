@@ -1,0 +1,19 @@
+{
+  "name": "reframe-tracker",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "generate": "cd ../spacetime && spacetime generate --lang typescript --out-dir ../tracker/src/module_bindings --module-path ./spacetimedb -y",
+    "deploy": "npm run build && npx -y wrangler@latest pages deploy dist --project-name reframe-tracker --branch main --commit-dirty=true"
+  },
+  "dependencies": {
+    "spacetimedb": "2.13.*"
+  },
+  "devDependencies": {
+    "typescript": "~5.6.2",
+    "vite": "^6.0.0"
+  }
+}

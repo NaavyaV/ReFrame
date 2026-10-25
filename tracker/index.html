@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ReFrame live tracker</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2314212e'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%233ccf8e'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="bar">
+    <h1>ReFrame <span>live</span></h1>
+    <label class="who">
+      <span class="sr">User</span>
+      <select id="user"><option value="">All users</option></select>
+    </label>
+    <p class="link" id="link"><i></i><span>Connecting</span></p>
+  </header>
+
+  <main>
+    <section class="now" id="now" aria-live="polite"></section>
+
+    <div class="grid">
+      <section class="feed">
+        <h2>Activity</h2>
+        <ol id="events"></ol>
+      </section>
+      <aside class="side">
+        <section class="alerts">
+          <h2>Alerts <b id="alert-count">0</b></h2>
+          <ol id="alerts" aria-live="assertive"></ol>
+        </section>
+        <section class="runs">
+          <h2>Runs</h2>
+          <ol id="runs"></ol>
+        </section>
+      </aside>
+    </div>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
