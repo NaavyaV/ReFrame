@@ -13,30 +13,30 @@
     .heard-live{max-width:min(900px,100%);color:#fff;font-size:clamp(26px,3.4vw,42px);line-height:1.35;font-weight:600;
       text-align:center;text-wrap:balance}
     .heard-live.waiting{color:rgba(255,255,255,.55);font-weight:500}
-    .dock{position:fixed;z-index:1;top:32px;right:32px;display:flex;flex-direction:column;align-items:flex-end;gap:10px;
+    .dock{position:fixed;z-index:1;top:53px;right:53px;display:flex;flex-direction:column;align-items:flex-end;gap:12px;
       color:#f4f6fb;font-size:15px;line-height:1.45}
     .orb-row{position:relative}
-    .orb{width:64px;height:64px;border-radius:50%;border:1.5px solid rgba(143,176,255,.55);cursor:pointer;color:#fff;
-      background:radial-gradient(circle at 30% 25%,rgba(111,145,255,.75),rgba(18,22,32,.6) 70%);
+    .orb{width:106px;height:106px;border-radius:50%;border:2px solid rgba(143,176,255,.7);cursor:pointer;color:#fff;
+      background:radial-gradient(circle at 30% 25%,rgba(111,145,255,.95),rgba(18,22,32,.9) 70%);
       backdrop-filter:blur(14px) saturate(1.4);-webkit-backdrop-filter:blur(14px) saturate(1.4);
-      box-shadow:0 10px 30px rgba(0,0,0,.3),0 0 0 6px rgba(111,145,255,.12);display:grid;place-items:center;opacity:.72;
+      box-shadow:0 14px 40px rgba(0,0,0,.35),0 0 0 10px rgba(111,145,255,.18);display:grid;place-items:center;opacity:.95;
       transition:opacity .2s,transform .2s,background .2s,box-shadow .08s;position:relative;padding:0}
     .orb:hover,.orb[data-state]:not([data-state="idle"]){opacity:1;transform:scale(1.06)}
-    .orb svg{width:28px;height:28px}
-    .orb[data-state="listening"]{background:radial-gradient(circle at 30% 25%,rgba(255,120,120,.85),rgba(70,18,24,.75) 70%);
-      border-color:rgba(255,160,160,.8);
-      box-shadow:0 10px 30px rgba(0,0,0,.3),0 0 0 calc(3px + var(--lvl,0) * 7px) rgba(255,110,110,.3)}
-    .orb-dots{display:flex;gap:5px;align-items:center;height:28px}
-    .orb-dots i{width:8px;height:8px;border-radius:50%;background:#fff;animation:bounce 1s ease-in-out infinite}
+    .orb svg{width:46px;height:46px}
+    .orb[data-state="listening"]{background:radial-gradient(circle at 30% 25%,rgba(255,120,120,.97),rgba(70,18,24,.92) 70%);
+      border-color:rgba(255,160,160,.85);
+      box-shadow:0 14px 40px rgba(0,0,0,.35),0 0 0 calc(5px + var(--lvl,0) * 12px) rgba(255,110,110,.35)}
+    .orb-dots{display:flex;gap:8px;align-items:center;height:46px}
+    .orb-dots i{width:13px;height:13px;border-radius:50%;background:#fff;animation:bounce 1s ease-in-out infinite}
     .orb-dots i:nth-child(2){animation-delay:.15s}.orb-dots i:nth-child(3){animation-delay:.3s}
-    @keyframes bounce{0%,60%,100%{transform:translateY(0);opacity:.55}30%{transform:translateY(-7px);opacity:1}}
-    .orb-wave{display:flex;gap:4px;align-items:center;height:30px}
-    .orb-wave i{width:4px;height:6px;border-radius:2px;background:#fff;transition:height .06s linear}
-    .chat-btn{position:absolute;left:-6px;bottom:-4px;z-index:1;width:24px;height:24px;border-radius:50%;padding:0;cursor:pointer;
-      border:1px solid rgba(255,255,255,.18);color:rgba(255,255,255,.85);background:rgba(18,22,32,.7);
-      backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);display:grid;place-items:center;opacity:.45;transition:opacity .2s}
+    @keyframes bounce{0%,60%,100%{transform:translateY(0);opacity:.55}30%{transform:translateY(-11px);opacity:1}}
+    .orb-wave{display:flex;gap:7px;align-items:center;height:50px}
+    .orb-wave i{width:7px;height:10px;border-radius:4px;background:#fff;transition:height .06s linear}
+    .chat-btn{position:absolute;left:-10px;bottom:-7px;z-index:1;width:40px;height:40px;border-radius:50%;padding:0;cursor:pointer;
+      border:1.5px solid rgba(255,255,255,.28);color:#fff;background:rgba(18,22,32,.92);
+      backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);display:grid;place-items:center;opacity:.8;transition:opacity .2s}
     .orb-row:hover .chat-btn,.chat-btn:focus-visible,.chat-btn[aria-expanded="true"]{opacity:1}
-    .chat-btn svg{width:13px;height:13px}
+    .chat-btn svg{width:21px;height:21px}
     .caption{max-width:min(510px,calc(100vw - 64px));padding:16px 20px;border-radius:20px;font-size:25.5px;line-height:1.4;
       background:rgba(16,19,28,.86);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);display:flex;gap:12px;
       align-items:flex-start;border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 32px rgba(0,0,0,.3);animation:pop .16s ease-out}
@@ -46,7 +46,7 @@
     .caption-x:hover{background:rgba(255,255,255,.2)}
     .caption-x svg{display:block;width:18px;height:18px}
     .caption.done .caption-x{display:block}
-    .panel{width:min(370px,calc(100vw - 56px));height:min(540px,calc(100vh - 170px));display:flex;flex-direction:column;
+    .panel{width:min(370px,calc(100vw - 56px));height:min(540px,calc(100vh - 240px));display:flex;flex-direction:column;
       background:rgba(16,19,28,.84);backdrop-filter:blur(22px) saturate(1.5);-webkit-backdrop-filter:blur(22px) saturate(1.5);
       border:1px solid rgba(255,255,255,.12);border-radius:20px;box-shadow:0 24px 60px rgba(0,0,0,.38);overflow:hidden;
       transform-origin:top right;animation:pop .16s ease-out}
@@ -232,7 +232,7 @@
     const bars = el.orb.querySelectorAll('.orb-wave i');
     [0.55, 0.8, 1, 0.8, 0.55].forEach((weight, i) => {
       const wobble = 0.75 + 0.25 * Math.sin(now / 90 + i * 1.7);
-      if (bars[i]) bars[i].style.height = `${6 + level * weight * wobble * 24}px`;
+      if (bars[i]) bars[i].style.height = `${10 + level * weight * wobble * 40}px`;
     });
     const text = spokenText(elapsed);
     if (view.open) {
