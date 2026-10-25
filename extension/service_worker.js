@@ -344,7 +344,45 @@ async function syncOrbMenu() {
 chrome.runtime.onInstalled.addListener(() => {
   syncOrbMenu();
   injectIntoOpenTabs();
+  saveFilesStamp();
 });
+
+// Chrome keeps running an unpacked extension's old scripts until it is reloaded by hand,
+// so flag the toolbar icon when the files on disk have changed since then.
+const UNPACKED = !('update_url' in chrome.runtime.getManifest());
+const STAMP_CHECK_MS = 2000;
+let lastStampCheck = 0;
+
+async function filesStamp() {
+  const m = chrome.runtime.getManifest();
+  const files = ['manifest.json', m.background.service_worker, 'shared/api.js', ...m.content_scripts.flatMap((c) => c.js)];
+  const texts = await Promise.all(
+    files.map((f) => fetch(chrome.runtime.getURL(f), { cache: 'no-store' }).then((r) => r.text()).catch(() => ''))
+  );
+  let hash = 5381;
+  for (const ch of texts.join('\u0000')) hash = ((hash * 33) ^ ch.charCodeAt(0)) >>> 0;
+  return hash;
+}
+
+async function saveFilesStamp() {
+  if (UNPACKED) await chrome.storage.local.set({ filesStamp: await filesStamp() });
+}
+
+async function flagIfEdited() {
+  if (!UNPACKED || Date.now() - lastStampCheck < STAMP_CHECK_MS) return;
+  lastStampCheck = Date.now();
+  const [{ filesStamp: saved }, now] = await Promise.all([chrome.storage.local.get('filesStamp'), filesStamp()]);
+  if (saved === undefined) await chrome.storage.local.set({ filesStamp: now });
+  const stale = saved !== undefined && saved !== now;
+  chrome.action.setBadgeText({ text: stale ? '↻' : '' });
+  chrome.action.setBadgeBackgroundColor({ color: '#d93025' });
+  chrome.action.setTitle({ title: stale ? 'ReFrame — reload in chrome://extensions' : 'ReFrame' });
+}
+
+if (UNPACKED) {
+  flagIfEdited();
+  setInterval(flagIfEdited, STAMP_CHECK_MS);
+}
 
 // Tabs opened before an install or reload keep orphaned scripts; give them working ones.
 async function injectIntoOpenTabs() {
@@ -387,6 +425,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const tabId = sender.tab?.id;
   if (tabId === undefined) return false;
+  flagIfEdited();
   switch (msg?.type) {
     case 'rf:hello':
       onHello(tabId).then(sendResponse);

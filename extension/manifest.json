@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ReFrame",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Rebuilds confusing websites around what you want to do.",
   "action": {
     "default_title": "ReFrame"
