@@ -181,6 +181,8 @@
     el.hideOrb.textContent = orbHidden ? 'Show floating button' : 'Hide floating button';
     el.orb.setAttribute('aria-expanded', String(view.open));
     el.orb.classList.toggle('working', view.busy || working);
+    // The typing dots always come with the page loader: a reply means the page is about to change.
+    RF.showVeil?.(signedIn && (view.busy || working));
     el.site.textContent = location.hostname;
     el.auth.hidden = signedIn;
     el.msgs.hidden = !signedIn;

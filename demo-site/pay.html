@@ -17,11 +17,27 @@
       <h2>One-Time Payment</h2>
       <form onsubmit="event.preventDefault(); location.href = 'confirmation.html';">
         <p><label for="amt">Payment amount</label><br /><input id="amt" name="amount" value="84.12" /></p>
-        <p><label for="cc">Card number</label><br /><input id="cc" name="cardnumber" autocomplete="cc-number" inputmode="numeric" maxlength="19" placeholder="1234 5678 9012 3456" required pattern="\d{4} ?\d{4} ?\d{4} ?\d{4}" /></p>
-        <p><label for="exp">Expiration (MM/YY)</label><br /><input id="exp" name="exp" autocomplete="cc-exp" inputmode="numeric" maxlength="5" placeholder="MM/YY" required pattern="(0[1-9]|1[0-2])/\d{2}" /></p>
-        <p><label for="cvv">Security code</label><br /><input id="cvv" name="cvv" autocomplete="cc-csc" inputmode="numeric" maxlength="3" placeholder="123" required pattern="\d{3}" /></p>
+        <p><label for="cc">Card number</label><br /><input id="cc" name="cardnumber" autocomplete="cc-number" inputmode="numeric" maxlength="19" placeholder="1234 5678 9012 3456" /></p>
+        <p><label for="exp">Expiration (MM/YY)</label><br /><input id="exp" name="exp" autocomplete="cc-exp" inputmode="numeric" maxlength="5" placeholder="MM/YY" /></p>
+        <p><label for="cvv">Security code</label><br /><input id="cvv" name="cvv" autocomplete="cc-csc" inputmode="numeric" maxlength="3" placeholder="123" /></p>
         <button class="small-btn" type="submit">Submit payment</button>
       </form>
+      <script>
+        const fmt = {
+          cc: (v) => v.replace(/\D/g, '').slice(0, 16).replace(/(\d{4})(?=\d)/g, '$1 '),
+          exp: (v) => {
+            let d = v.replace(/\D/g, '').slice(0, 4);
+            if (d.length === 1 && d > '1') d = '0' + d;
+            if (d.length >= 2 && !/^(0[1-9]|1[0-2])$/.test(d.slice(0, 2))) d = d[0];
+            return d.length > 2 ? d.slice(0, 2) + '/' + d.slice(2) : d;
+          },
+          cvv: (v) => v.replace(/\D/g, '').slice(0, 3),
+        };
+        for (const [id, f] of Object.entries(fmt)) {
+          const input = document.getElementById(id);
+          input.addEventListener('input', () => { if (input.value !== f(input.value)) input.value = f(input.value); });
+        }
+      </script>
     </main>
     <aside><div class="promo">Pay with AutoPay for a $2 credit.</div></aside>
   </div>

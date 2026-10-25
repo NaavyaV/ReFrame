@@ -76,6 +76,7 @@
         sendResponse({ snapshot: RF.takeSnapshot(), applied: RF.appliedSummary() });
         break;
       case 'rf:apply':
+        RF.ui.setState({ busy: false });
         RF.setPending(false);
         sendResponse(RF.applyOps(Array.isArray(msg.ops) ? msg.ops : []));
         break;

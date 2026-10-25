@@ -195,6 +195,7 @@ async function runReframe(tabId, text, { continuation = false } = {}) {
   if ((restoreGen.get(tabId) || 0) !== gen) return { ok: false, restored: true };
   const ops = res.operations || [];
   await chrome.tabs.sendMessage(tabId, { type: 'rf:apply', ops });
+  await chrome.storage.session.set({ [keys(tabId).busy]: false });
   await updateGoal(tabId, text, res, continuation, snapshot.url);
   await pushChat(tabId, { role: 'assistant', content: res.reply });
   return { ok: true };

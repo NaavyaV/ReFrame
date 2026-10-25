@@ -112,10 +112,14 @@
     styleTag(STYLE_ID).textContent = buildPageCss();
   }
 
+  RF.showVeil = (on) => {
+    if (on === document.documentElement.hasAttribute('data-reframe-pending')) return;
+    if (on) updatePageStyle();
+    document.documentElement.toggleAttribute('data-reframe-pending', on);
+  };
+
   RF.setPending = (on) => {
-    updatePageStyle();
-    if (on) document.documentElement.setAttribute('data-reframe-pending', '');
-    else document.documentElement.removeAttribute('data-reframe-pending');
+    RF.showVeil(on);
     RF.ui?.setWorking?.(on);
   };
 
