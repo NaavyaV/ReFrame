@@ -9,12 +9,12 @@
     [hidden]{display:none!important}
     .dock{position:fixed;top:16px;right:16px;display:flex;flex-direction:column;align-items:flex-end;gap:10px;
       color:#f4f6fb;font-size:15px;line-height:1.45}
-    .orb{width:48px;height:48px;border-radius:50%;border:1px solid rgba(255,255,255,.22);cursor:pointer;
-      background:rgba(18,22,32,.55);backdrop-filter:blur(14px) saturate(1.4);-webkit-backdrop-filter:blur(14px) saturate(1.4);
-      box-shadow:0 8px 28px rgba(0,0,0,.28);display:grid;place-items:center;opacity:.72;
+    .orb{width:58px;height:58px;border-radius:50%;border:1px solid rgba(255,255,255,.2);cursor:pointer;color:#f4f6fb;
+      background:rgba(18,22,32,.32);backdrop-filter:blur(12px) saturate(1.3);-webkit-backdrop-filter:blur(12px) saturate(1.3);
+      box-shadow:0 6px 22px rgba(0,0,0,.18);display:grid;place-items:center;opacity:.5;
       transition:opacity .2s,transform .2s,background .2s;position:relative;padding:0}
     .orb:hover,.orb[aria-expanded="true"]{opacity:1;transform:scale(1.04);background:rgba(18,22,32,.78)}
-    .orb svg{width:22px;height:22px}
+    .orb svg{width:27px;height:27px}
     .orb.working::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid transparent;
       border-top-color:#8fb0ff;border-right-color:#8fb0ff;animation:spin .8s linear infinite}
     @keyframes spin{to{transform:rotate(360deg)}}
@@ -94,12 +94,13 @@
       <section class="panel" role="dialog" aria-label="ReFrame" hidden>
         <div class="head">
           <div class="title">ReFrame<small class="site"></small></div>
-          <button class="icon restore" title="Restore page" aria-label="Restore page" hidden>${ICONS.restore}</button>
+          <button class="icon restore" title="Reset page and chat" aria-label="Reset page and chat" hidden>${ICONS.restore}</button>
           <button class="icon more" title="Account" aria-label="Account" hidden>${ICONS.more}</button>
           <button class="icon close" title="Close" aria-label="Close">${ICONS.close}</button>
         </div>
         <div class="menu" hidden>
           <div class="who"></div>
+          <button class="hide-orb">Hide floating button</button>
           <button class="signout">Sign out</button>
         </div>
         <form class="auth" novalidate hidden>
@@ -129,7 +130,7 @@
   const $ = (sel) => root.querySelector(sel);
   const el = {
     orb: $('.orb'), panel: $('.panel'), site: $('.site'), restore: $('.restore'), more: $('.more'), close: $('.close'),
-    menu: $('.menu'), who: $('.who'), signout: $('.signout'),
+    menu: $('.menu'), who: $('.who'), signout: $('.signout'), hideOrb: $('.hide-orb'),
     auth: $('.auth'), authTitle: $('.auth-title'), nameField: $('.name-field'), err: $('.err'),
     authSubmit: $('.auth-submit'), authToggle: $('.auth-toggle'),
     msgs: $('.msgs'), composer: $('.composer'), input: $('textarea'), send: $('.send'),
@@ -137,6 +138,7 @@
   };
 
   let view = { open: false, chat: [], busy: false, user: null };
+  let orbHidden = false;
   let authMode = 'signin';
   let working = false;
 
@@ -171,6 +173,8 @@
   function render() {
     const signedIn = Boolean(view.user);
     el.panel.hidden = !view.open;
+    el.orb.hidden = orbHidden && !view.open;
+    el.hideOrb.textContent = orbHidden ? 'Show floating button' : 'Hide floating button';
     el.orb.setAttribute('aria-expanded', String(view.open));
     el.orb.classList.toggle('working', view.busy || working);
     el.site.textContent = location.hostname;
@@ -202,9 +206,26 @@
     el.menu.hidden = true;
     send('rf:signout');
   });
+  el.hideOrb.addEventListener('click', () => {
+    el.menu.hidden = true;
+    chrome.storage.local.set({ orbHidden: !orbHidden });
+  });
   el.restore.addEventListener('click', () => {
     RF.restoreAll();
+    view.chat = [];
+    render();
+    el.input.focus();
     send('rf:restored');
+  });
+  chrome.storage.local.get('orbHidden').then(({ orbHidden: hidden }) => {
+    orbHidden = Boolean(hidden);
+    render();
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && 'orbHidden' in changes) {
+      orbHidden = Boolean(changes.orbHidden.newValue);
+      render();
+    }
   });
   el.authToggle.addEventListener('click', () => {
     authMode = authMode === 'signin' ? 'register' : 'signin';

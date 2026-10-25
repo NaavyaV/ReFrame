@@ -14,6 +14,8 @@ const pendingRebuild = new Set();
 const debounceTimers = new Map();
 const lastAction = new Map();
 const retriedRebuild = new Set();
+// Bumped on restore so answers that arrive afterwards are dropped instead of re-applied.
+const restoreGen = new Map();
 const MAX_QUIET_RETRY_S = 20;
 // Set when the server answers 429; no automatic rebuilds or chats are sent before this time.
 let cooldownUntil = 0;
@@ -162,6 +164,7 @@ async function runReframe(tabId, text, { continuation = false } = {}) {
   const history = await chatHistory(tabId);
   if (!continuation) await pushChat(tabId, { role: 'user', content: text });
 
+  const gen = restoreGen.get(tabId) || 0;
   const { snapshot, applied } = await snapshotTab(tabId);
   const cacheKey = `${text}|${signature(snapshot)}`;
   let res = continuation ? await cacheGet(cacheKey) : null;
@@ -174,6 +177,7 @@ async function runReframe(tabId, text, { continuation = false } = {}) {
     });
     if (res.operations?.length) await cachePut(cacheKey, res);
   }
+  if ((restoreGen.get(tabId) || 0) !== gen) return { ok: false, restored: true };
   const ops = res.operations || [];
   await chrome.tabs.sendMessage(tabId, { type: 'rf:apply', ops });
   await updateGoal(tabId, text, res, continuation, snapshot.url);
@@ -291,7 +295,43 @@ async function toggleWidget(tab) {
   } catch {}
 }
 
+async function onRestored(tabId) {
+  restoreGen.set(tabId, (restoreGen.get(tabId) || 0) + 1);
+  clearTimeout(debounceTimers.get(tabId));
+  pendingRebuild.delete(tabId);
+  retriedRebuild.delete(tabId);
+  await chrome.storage.session.remove([keys(tabId).goal, keys(tabId).chat]);
+  await broadcast(tabId);
+}
+
 chrome.action.onClicked.addListener(toggleWidget);
+
+// Right-click the toolbar icon to show or hide the floating button on pages.
+const ORB_MENU_ID = 'reframe-show-orb';
+
+async function syncOrbMenu() {
+  const { orbHidden } = await chrome.storage.local.get('orbHidden');
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: ORB_MENU_ID,
+      title: 'Show ReFrame button on pages',
+      type: 'checkbox',
+      checked: !orbHidden,
+      contexts: ['action'],
+    });
+  });
+}
+
+chrome.runtime.onInstalled.addListener(syncOrbMenu);
+chrome.runtime.onStartup.addListener(syncOrbMenu);
+chrome.contextMenus.onClicked.addListener((info) => {
+  if (info.menuItemId === ORB_MENU_ID) chrome.storage.local.set({ orbHidden: !info.checked });
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && 'orbHidden' in changes) {
+    chrome.contextMenus.update(ORB_MENU_ID, { checked: !changes.orbHidden.newValue }, () => void chrome.runtime.lastError);
+  }
+});
 chrome.commands.onCommand.addListener(async (command) => {
   if (command !== 'toggle-chat') return;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -343,7 +383,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       lastAction.set(tabId, Date.now());
       return false;
     case 'rf:restored':
-      chrome.storage.session.remove(keys(tabId).goal).then(() => sendResponse({ ok: true }));
+      onRestored(tabId).then(() => sendResponse({ ok: true }));
       return true;
     default:
       return false;

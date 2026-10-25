@@ -16,7 +16,7 @@
       "description": "Open or close the ReFrame chat"
     }
   },
-  "permissions": ["storage", "tabs", "scripting", "activeTab"],
+  "permissions": ["storage", "tabs", "scripting", "activeTab", "contextMenus"],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [
     {
