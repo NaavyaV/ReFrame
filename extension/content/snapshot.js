@@ -105,6 +105,8 @@
   }
 
   RF.isSensitiveField = (el) => isSensitive(el, labelFor(el));
+  RF.itemText = (el) =>
+    clean(labelFor(el) || el.innerText || el.textContent, 200).replace(/\.?\s*(open|view|click|tap)\b[^.]*(details|more)\.?$/i, '');
 
   function hrefFor(el) {
     const raw = el.getAttribute('href');

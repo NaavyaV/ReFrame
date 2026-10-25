@@ -63,7 +63,14 @@
       [data-reframe-label]:not(input)::after{content:attr(data-reframe-label);font-size:18px;line-height:1.3}
       #${ROOT_ID}{box-sizing:border-box;width:min(100% - 32px,880px);margin:24px auto;font-size:20px;line-height:1.5}
       #${ROOT_ID} *{box-sizing:border-box}
+      #${ROOT_ID},#${ROOT_ID} *{position:static!important;inset:auto!important;float:none!important;transform:none!important;
+        height:auto!important;max-height:none!important;overflow:visible!important;clip-path:none!important;
+        visibility:visible!important;opacity:1!important;animation:none!important}
+      #${ROOT_ID} button,#${ROOT_ID} [data-rf-target]{min-height:56px!important;max-width:100%}
       #${ROOT_ID} [data-rf-target]{cursor:pointer}
+      #${ROOT_ID} [data-rf-each]{display:flex;flex-direction:column;gap:10px}
+      #${ROOT_ID} [data-rf-each]:not([data-rf-class])>button{display:block;width:100%;text-align:left;font:inherit;font-size:20px;line-height:1.35;
+        padding:14px 16px;min-height:56px;color:inherit;background:transparent;border:1px solid currentColor;border-radius:10px;opacity:.95}
       #${ROOT_ID} :focus-visible{outline:3px solid currentColor;outline-offset:3px}
     `;
     const filters = [];
@@ -168,6 +175,8 @@
         else if (n === 'data-rf-target' || n === 'data-rf-bind') {
           if (/^r\d{1,5}$/.test(value) && RF.byRef(value)) el.setAttribute(n, value);
         } else if (n === 'data-rf-confirm' || n === 'data-rf-primary') el.setAttribute(n, '1');
+        else if (n === 'data-rf-each' && /^r\d{1,5}-r\d{1,5}$/.test(value)) el.setAttribute(n, value);
+        else if (n === 'data-rf-class') el.setAttribute(n, value.replace(/[^\w\s-]/g, '').slice(0, 120));
         else if (n === 'id' || n === 'for') el.setAttribute(n, `rf-${value.replace(/[^\w-]/g, '').slice(0, 40)}`);
         else if (n === 'type' && tag === 'INPUT') el.setAttribute('type', INPUT_TYPES.test(value) ? value : 'text');
         else if (['placeholder', 'title', 'alt'].includes(n)) el.setAttribute(n, value.slice(0, 200));
@@ -309,6 +318,33 @@
     state.rendered = false;
   }
 
+  const MAX_LIST_ITEMS = 120;
+
+  // <div data-rf-each="r18-r57"> becomes one button per real page item, labelled with that item's own text.
+  function expandLists(root) {
+    for (const list of root.querySelectorAll('[data-rf-each]')) {
+      const [from, to] = list.getAttribute('data-rf-each').split('-').map((r) => Number(r.slice(1)));
+      const itemClass = list.getAttribute('data-rf-class');
+      const confirm = list.hasAttribute('data-rf-confirm');
+      list.removeAttribute('data-rf-confirm');
+      const present = new Set([...root.querySelectorAll('[data-rf-target]')].map((n) => n.getAttribute('data-rf-target')));
+      for (let i = from; i <= to && i - from < MAX_LIST_ITEMS; i++) {
+        const ref = `r${i}`;
+        if (present.has(ref)) continue;
+        const real = RF.byRef(ref);
+        const text = real && RF.itemText(real);
+        if (!text) continue;
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.setAttribute('data-rf-target', ref);
+        if (confirm) item.setAttribute('data-rf-confirm', '1');
+        if (itemClass) item.className = itemClass;
+        item.textContent = text;
+        list.appendChild(item);
+      }
+    }
+  }
+
   function render(op) {
     clearRender();
     const parsed = new DOMParser().parseFromString(`<body>${op.html}</body>`, 'text/html');
@@ -316,6 +352,7 @@
     root.id = ROOT_ID;
     root.setAttribute('data-reframe-root', '');
     sanitizeInto(parsed.body, root, pageImageSources());
+    expandLists(root);
     if (!root.childNodes.length) return;
 
     styleTag(RENDER_STYLE_ID).textContent = scopedCss(op.css);

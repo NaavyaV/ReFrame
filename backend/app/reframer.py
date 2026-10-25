@@ -30,6 +30,7 @@ CONSEQUENTIAL_LINK = re.compile(
     r"\b(delete|sign ?out|log ?out|unsubscribe|close account|cancel (my )?(account|service|plan))\b",
     re.I,
 )
+_TAG_WITH_EACH = re.compile(r"<[a-zA-Z][^<>]*?\bdata-rf-each\s*=\s*[\"'](r\d{1,5})-(r\d{1,5})[\"'][^<>]*>")
 _TAG_WITH_REF = re.compile(r"<[a-zA-Z][^<>]*?\bdata-rf-(target|bind)\s*=\s*[\"'](r\d{1,5})[\"'][^<>]*>")
 
 SYSTEM_PROMPT = """You are ReFrame, a front-end accessibility layer for older adults. You only change how the \
@@ -49,6 +50,8 @@ render {"op":"render","html":"...","css":"...","isolate":true,"keep_refs":["rN"]
   real field rN. data-rf-primary="1" on the single next step; data-rf-confirm="1" on pay/submit/delete/buy/send.
   Labels say what the button really does; a link leading toward the goal is "Go to <place>".
   No script/form/iframe/href/url()/event handlers. Never invent amounts, dates or names; use "context".
+  Long lists (LISTS below: events, results, rows) -> <div data-rf-each="rA-rB" data-rf-class="site classes"></div>;
+  the extension fills in one button per item with its real text. Never retype list items.
   isolate=false + "anchor_ref" + "position"(before|after|prepend|append): small addition, nothing hidden.
 hide|unhide|highlight {"op":"hide","refs":["rN"]}
 relabel {"op":"relabel","ref":"rN","text":"plain words"}
@@ -144,7 +147,46 @@ def _format_snapshot(s: Snapshot, message: str) -> str:
         lines.append("NOTE: a popup is open")
     lines.append("PAGE:")
     lines.extend(_describe(e) for e in _select_elements(s, message))
+    lists = _find_lists(s)
+    if lists:
+        lines.append("LISTS:")
+        lines.extend(lists)
     return "\n".join(lines)
+
+
+MIN_LIST_ITEMS = 5
+
+
+def _ref_num(ref: str) -> int:
+    return int(ref[1:])
+
+
+def _find_lists(s: Snapshot) -> list[str]:
+    """Runs of consecutive, similar controls (same tag and region), e.g. schedule rows or search results."""
+    controls = sorted((e for e in s.elements if e.kind == "control"), key=lambda e: _ref_num(e.ref))
+    runs: list[list[SnapElement]] = []
+    for el in controls:
+        prev = runs[-1][-1] if runs else None
+        if (
+            prev
+            and _ref_num(el.ref) == _ref_num(prev.ref) + 1
+            and el.tag == prev.tag
+            and el.region == prev.region
+            and el.input_type is None
+        ):
+            runs[-1].append(el)
+        else:
+            runs.append([el])
+    out = []
+    for run in runs:
+        if len(run) < MIN_LIST_ITEMS:
+            continue
+        first, last = run[0], run[-1]
+        out.append(
+            f'{first.ref}-{last.ref}: {len(run)} {first.tag}s in {first.region or "page"}, '
+            f'e.g. "{(first.text or first.label or "")[:60]}" ... "{(last.text or last.label or "")[:60]}"'
+        )
+    return out
 
 
 def _build_messages(req: ReframeRequest) -> list[dict]:
@@ -208,6 +250,19 @@ def _check_render(op: RenderOp, by_ref: dict[str, SnapElement], snapshot: Snapsh
         return tag
 
     op.html = _TAG_WITH_REF.sub(fix_tag, op.html)
+
+    def fix_each(m: re.Match) -> str:
+        nonlocal bound
+        tag, start, end = m.group(0), m.group(1), m.group(2)
+        items = [by_ref.get(f"r{i}") for i in range(_ref_num(start), _ref_num(end) + 1)]
+        if _ref_num(end) < _ref_num(start) or not items[0] or not items[-1]:
+            return re.sub(r"\sdata-rf-each\s*=\s*[\"'][^\"']*[\"']", "", tag)
+        bound += len(items)
+        if any(el and el.kind == "control" and _needs_confirm(el, snapshot) for el in items):
+            tag = tag[:-1].rstrip("/") + ' data-rf-confirm="1">'
+        return tag
+
+    op.html = _TAG_WITH_EACH.sub(fix_each, op.html)
     if bound == 0 and op.isolate:
         return None
     op.keep_refs = [r for r in op.keep_refs if r in by_ref]
