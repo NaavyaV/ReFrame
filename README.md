@@ -24,6 +24,7 @@ Simple visual requests (bigger/smaller text, dark mode, high contrast, hide imag
 | `demo-site/` | Static utility-company site for testing ([reframe-demo.pages.dev](https://reframe-demo.pages.dev)) |
 | `tracker/` | Live tracker page ([reframe-tracker.pages.dev](https://reframe-tracker.pages.dev)) |
 | `docs/BUILD_PLAN.md` | Phased build plan |
+| `agents/` | Orchestrator, technical helper, scraper, and caretaker |
 
 ## Requirements
 
@@ -86,6 +87,14 @@ python3 -m http.server 5173
 ```
 
 Open <http://localhost:5173>.
+
+### 5. Agents
+
+```bash
+python run_all.py
+```
+
+Orchestrator on port 8040, technical helper on 8010, scraper on 8030, caretaker on 8020. They share `.env`.
 
 ## Install the extension
 
