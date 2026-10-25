@@ -322,7 +322,18 @@ async function syncOrbMenu() {
   });
 }
 
-chrome.runtime.onInstalled.addListener(syncOrbMenu);
+chrome.runtime.onInstalled.addListener(() => {
+  syncOrbMenu();
+  injectIntoOpenTabs();
+});
+
+// Tabs opened before an install or reload keep orphaned scripts; give them working ones.
+async function injectIntoOpenTabs() {
+  const files = chrome.runtime.getManifest().content_scripts[0].js;
+  for (const tab of await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] })) {
+    chrome.scripting.executeScript({ target: { tabId: tab.id }, files }).catch(() => {});
+  }
+}
 chrome.runtime.onStartup.addListener(syncOrbMenu);
 chrome.contextMenus.onClicked.addListener((info) => {
   if (info.menuItemId === ORB_MENU_ID) chrome.storage.local.set({ orbHidden: !info.checked });

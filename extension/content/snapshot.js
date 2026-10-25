@@ -1,5 +1,17 @@
 (() => {
+  // After the extension reloads, the old scripts stay on the page but can no longer reach it.
+  if (window.__reframe && !window.__reframe.alive?.()) {
+    window.__reframe.teardown?.();
+    window.__reframe = undefined;
+  }
   const RF = (window.__reframe = window.__reframe || {});
+  RF.alive = () => {
+    try {
+      return Boolean(chrome.runtime?.id);
+    } catch {
+      return false;
+    }
+  };
   if (RF.snapshotLoaded) return;
   RF.snapshotLoaded = true;
 

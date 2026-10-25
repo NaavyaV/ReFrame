@@ -11,7 +11,17 @@
     navigating = true;
   });
 
-  RF.notify = (type, data = {}) => chrome.runtime.sendMessage({ type, ...data }).catch(() => null);
+  RF.notify = (type, data = {}) => {
+    if (!RF.alive()) {
+      RF.teardown?.();
+      return Promise.resolve(null);
+    }
+    try {
+      return chrome.runtime.sendMessage({ type, ...data }).catch(() => null);
+    } catch {
+      return Promise.resolve(null);
+    }
+  };
 
   RF.notifyPageChanged = (reason) => {
     if (!navigating) RF.notify('rf:page-changed', { reason });
@@ -35,7 +45,12 @@
   };
 
   let lastUrl = location.href;
-  setInterval(() => {
+  const urlTimer = setInterval(() => {
+    if (!RF.alive()) {
+      clearInterval(urlTimer);
+      RF.teardown?.();
+      return;
+    }
     if (location.href !== lastUrl) {
       lastUrl = location.href;
       RF.notifyPageChanged('url');

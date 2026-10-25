@@ -7,18 +7,19 @@
     :host{all:initial}
     *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
     [hidden]{display:none!important}
-    .dock{position:fixed;top:16px;right:16px;display:flex;flex-direction:column;align-items:flex-end;gap:10px;
+    .dock{position:fixed;top:72px;right:40px;display:flex;flex-direction:column;align-items:flex-end;gap:10px;
       color:#f4f6fb;font-size:15px;line-height:1.45}
-    .orb{width:58px;height:58px;border-radius:50%;border:1px solid rgba(255,255,255,.2);cursor:pointer;color:#f4f6fb;
-      background:rgba(18,22,32,.32);backdrop-filter:blur(12px) saturate(1.3);-webkit-backdrop-filter:blur(12px) saturate(1.3);
-      box-shadow:0 6px 22px rgba(0,0,0,.18);display:grid;place-items:center;opacity:.5;
+    .orb{width:64px;height:64px;border-radius:50%;border:1.5px solid rgba(143,176,255,.55);cursor:pointer;color:#fff;
+      background:radial-gradient(circle at 30% 25%,rgba(111,145,255,.75),rgba(18,22,32,.6) 70%);
+      backdrop-filter:blur(14px) saturate(1.4);-webkit-backdrop-filter:blur(14px) saturate(1.4);
+      box-shadow:0 10px 30px rgba(0,0,0,.3),0 0 0 6px rgba(111,145,255,.12);display:grid;place-items:center;opacity:.72;
       transition:opacity .2s,transform .2s,background .2s;position:relative;padding:0}
-    .orb:hover,.orb[aria-expanded="true"]{opacity:1;transform:scale(1.04);background:rgba(18,22,32,.78)}
-    .orb svg{width:27px;height:27px}
-    .orb.working::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid transparent;
+    .orb:hover,.orb[aria-expanded="true"]{opacity:1;transform:scale(1.06)}
+    .orb svg{width:30px;height:30px}
+    .orb.working::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:2px solid transparent;
       border-top-color:#8fb0ff;border-right-color:#8fb0ff;animation:spin .8s linear infinite}
     @keyframes spin{to{transform:rotate(360deg)}}
-    .panel{width:min(370px,calc(100vw - 32px));height:min(540px,calc(100vh - 96px));display:flex;flex-direction:column;
+    .panel{width:min(370px,calc(100vw - 56px));height:min(540px,calc(100vh - 170px));display:flex;flex-direction:column;
       background:rgba(16,19,28,.84);backdrop-filter:blur(22px) saturate(1.5);-webkit-backdrop-filter:blur(22px) saturate(1.5);
       border:1px solid rgba(255,255,255,.12);border-radius:20px;box-shadow:0 24px 60px rgba(0,0,0,.38);overflow:hidden;
       transform-origin:top right;animation:pop .16s ease-out}
@@ -142,7 +143,10 @@
   let authMode = 'signin';
   let working = false;
 
-  const send = (type, data = {}) => chrome.runtime.sendMessage({ type, ...data }).catch(() => null);
+  const send = (type, data = {}) => RF.notify(type, data);
+  const setLocal = (data) => {
+    if (RF.alive()) chrome.storage.local.set(data).catch(() => {});
+  };
 
   function renderAuthMode() {
     const register = authMode === 'register';
@@ -208,7 +212,7 @@
   });
   el.hideOrb.addEventListener('click', () => {
     el.menu.hidden = true;
-    chrome.storage.local.set({ orbHidden: !orbHidden });
+    setLocal({ orbHidden: !orbHidden });
   });
   el.restore.addEventListener('click', () => {
     RF.restoreAll();
@@ -217,7 +221,7 @@
     el.input.focus();
     send('rf:restored');
   });
-  chrome.storage.local.get('orbHidden').then(({ orbHidden: hidden }) => {
+  if (RF.alive()) chrome.storage.local.get('orbHidden').then(({ orbHidden: hidden }) => {
     orbHidden = Boolean(hidden);
     render();
   });
@@ -317,8 +321,13 @@
   const mount = () => document.documentElement.appendChild(host);
   mount();
   // Some single-page apps replace <html> children; put the widget back if it gets removed.
-  new MutationObserver(() => {
+  const remount = new MutationObserver(() => {
     if (!host.isConnected) mount();
-  }).observe(document.documentElement, { childList: true });
+  });
+  remount.observe(document.documentElement, { childList: true });
+  RF.teardown = () => {
+    remount.disconnect();
+    host.remove();
+  };
   render();
 })();

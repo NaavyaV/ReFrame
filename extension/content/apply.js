@@ -53,6 +53,10 @@
     let css = `
       html:not([data-reframe-peek]) [data-reframe-hidden]{display:none!important}
       html[data-reframe-pending] body{opacity:.35!important;transition:opacity .15s ease!important;pointer-events:none!important}
+      html[data-reframe-pending]::after{content:"";position:fixed;top:50%;left:50%;width:56px;height:56px;margin:-28px 0 0 -28px;
+        border-radius:50%;border:5px solid rgba(79,116,255,.22);border-top-color:#4f74ff;z-index:2147483646;
+        animation:reframe-spin .8s linear infinite;pointer-events:none}
+      @keyframes reframe-spin{to{transform:rotate(360deg)}}
       [data-reframe-highlight]{outline:4px solid #f5a300!important;outline-offset:3px!important}
       [data-reframe-label]:not(input){font-size:0!important}
       [data-reframe-label]:not(input)>*{display:none!important}
